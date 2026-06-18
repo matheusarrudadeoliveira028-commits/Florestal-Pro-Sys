@@ -234,7 +234,7 @@ export default function RelatoriosScreen() {
               <div class="header-left">
                 <p>Período: <strong>${dataInicio} até ${dataFim}</strong></p>
                 <p>Encarregado: <strong style="text-transform: uppercase;">${encarregadoNome}</strong></p>
-                <p>Produção: <strong style="${folha.tipo === 'Diaria' ? 'color: #E74C3C; text-transform: uppercase;' : ''}">${folha.tipo}</strong></p>
+                ${folha.tipo === 'Registrado' ? '' : `<p>Produção: <strong style="color: #E74C3C; text-transform: uppercase;">${folha.tipo}</strong></p>`}
                 <p>Colaborador: <strong style="font-size: 16px; text-transform: uppercase;">${folha.nome}</strong></p>
                 <p style="color: #7F8C8D; font-size: 12px; margin-top: 5px;">Admissão Registrada: <strong>${dataAdmissaoCabecalho}</strong></p>
               </div>

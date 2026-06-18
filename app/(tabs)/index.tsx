@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
-import { router } from 'expo-router';
-import React, { memo, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import React, { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
@@ -66,10 +66,13 @@ export default function HomeScreen() {
   const [modalEquipeVisivel, setModalEquipeVisivel] = useState(false);
   const [modalPendentesVisivel, setModalPendentesVisivel] = useState(false);
 
-  useEffect(() => {
-    carregarUsuarioLogado(); 
-    carregarLancamentosLocais(); 
-  }, []);
+  // 👉 Correção 1: useFocusEffect faz a tela atualizar os dados toda vez que você clica na aba
+  useFocusEffect(
+    useCallback(() => {
+      carregarUsuarioLogado(); 
+      carregarLancamentosLocais(); 
+    }, [])
+  );
 
   const carregarUsuarioLogado = async () => {
     try {
@@ -221,9 +224,17 @@ export default function HomeScreen() {
     }
     
     const dataMomento = new Date();
-    const horaAtualStr = dataMomento.toLocaleTimeString('pt-BR').substring(0, 5); 
     
-    if (horaAtualStr < horaInicioPermitida || horaAtualStr > horaFimPermitida) {
+    // 👉 Correção 2: Verificação Matemática Blindada (Não falha em modo Offline nem com Strings curtas)
+    const horaAtualMinutos = dataMomento.getHours() * 60 + dataMomento.getMinutes();
+    
+    const [horaIniStr, minIniStr] = horaInicioPermitida.split(':');
+    const [horaFimStr, minFimStr] = horaFimPermitida.split(':');
+    
+    const minutosInicio = (parseInt(horaIniStr) * 60) + (parseInt(minIniStr) || 0);
+    const minutosFim = (parseInt(horaFimStr) * 60) + (parseInt(minFimStr) || 0);
+
+    if (horaAtualMinutos < minutosInicio || horaAtualMinutos > minutosFim) {
       return Alert.alert("🚫 Fora do Expediente", `Permitido apenas entre ${horaInicioPermitida} e ${horaFimPermitida}.`);
     }
 
