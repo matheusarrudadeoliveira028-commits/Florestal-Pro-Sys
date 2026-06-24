@@ -1,13 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
-import { router } from 'expo-router';
-import React, { memo, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import React, { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
 // =========================================================================
-// COMPONENTE ISOLADO DE RELÓGIO (Apenas para exibir a hora atual do aparelho)
+// COMPONENTE ISOLADO DE RELÓGIO
 // =========================================================================
 const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
   const [horaAtual, setHoraAtual] = useState(new Date());
@@ -62,18 +62,25 @@ export default function RetroativoScreen() {
   
   const [isOffline, setIsOffline] = useState(false);
 
+  // ESTADOS DOS MODAIS E EDIÇÃO
   const [modalEquipeVisivel, setModalEquipeVisivel] = useState(false);
   const [modalPendentesVisivel, setModalPendentesVisivel] = useState(false);
+  const [indexEdicao, setIndexEdicao] = useState<number | null>(null);
+  const [dataOriginalEdicao, setDataOriginalEdicao] = useState<string | null>(null);
 
-  useEffect(() => {
-    carregarUsuarioLogado(); 
-    carregarLancamentosLocais(); 
-    
-    // Sugere a data e hora atual para facilitar, mas deixa editável
-    const hoje = new Date();
-    setDataRetroativa(hoje.toLocaleDateString('pt-BR'));
-    setHoraRetroativa(hoje.toLocaleTimeString('pt-BR').substring(0, 5));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      carregarUsuarioLogado(); 
+      carregarLancamentosLocais(); 
+      
+      // Se não estiver editando, sugere a hora atual
+      if (indexEdicao === null) {
+        const hoje = new Date();
+        setDataRetroativa(hoje.toLocaleDateString('pt-BR'));
+        setHoraRetroativa(hoje.toLocaleTimeString('pt-BR').substring(0, 5));
+      }
+    }, [])
+  );
 
   const carregarUsuarioLogado = async () => {
     try {
@@ -148,16 +155,20 @@ export default function RetroativoScreen() {
   const atualizarMochilaManual = () => { carregarUsuarioLogado(); Alert.alert("Atualizando", "Buscando dados..."); };
 
   useEffect(() => {
-    setQuadra(''); setRamal(''); setLimitePes(null);
+    if (indexEdicao === null) {
+      setQuadra(''); setRamal(''); setLimitePes(null);
+    }
     if (fazenda) setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))] as string[]);
     else setQuadrasDisponiveis([]);
-  }, [fazenda]);
+  }, [fazenda, mapaCompleto]);
 
   useEffect(() => {
-    setRamal(''); setLimitePes(null);
+    if (indexEdicao === null) {
+      setRamal(''); setLimitePes(null);
+    }
     if (quadra) setRamaisDisponiveis(mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra));
     else setRamaisDisponiveis([]);
-  }, [quadra]);
+  }, [quadra, fazenda, mapaCompleto]);
 
   useEffect(() => {
     const numRamal = ramal.trim();
@@ -178,7 +189,6 @@ export default function RetroativoScreen() {
     } else setValorTotalCalculado(0);
   }, [servicoSelecionadoCompleto, quantidade]);
 
-  // Alerta Cego
   const handleMudancaQuantidade = (texto: string) => {
     const valorDigitado = parseInt(texto) || 0;
     if (limitePes !== null && valorDigitado > limitePes) {
@@ -203,6 +213,41 @@ export default function RetroativoScreen() {
     setHoraRetroativa(v.substring(0, 5));
   };
 
+  // 👉 Função para PUXAR os dados do lançamento para o formulário
+  const prepararEdicao = (index: number) => {
+    const item = lancamentosPendentes[index];
+    setColaborador(item.colaborador);
+    setFazenda(item.fazenda);
+    setQuadra(item.quadra);
+    setServico(item.servico);
+    setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === item.servico) || null);
+    setRamal(String(item.ramal));
+    setQuantidade(String(item.quantidade));
+
+    // Extrai data e hora salvas e coloca de volta nos campos
+    try {
+      const [datePart, timePart] = item.data.split('T');
+      const [ano, mes, dia] = datePart.split('-');
+      setDataRetroativa(`${dia}/${mes}/${ano}`);
+      setHoraRetroativa(timePart.substring(0, 5));
+    } catch(e) {}
+
+    setIndexEdicao(index);
+    setDataOriginalEdicao(item.data); 
+    setModalPendentesVisivel(false);
+  };
+
+  // 👉 Função para LIMPAR o modo de edição
+  const cancelarEdicao = () => {
+    setIndexEdicao(null);
+    setDataOriginalEdicao(null);
+    setServico('');
+    setServicoSelecionadoCompleto(null);
+    setRamal('');
+    setQuantidade('');
+    setValorTotalCalculado(0);
+  };
+
   const salvarLancamento = async () => {
     if (!colaborador || !servico || !fazenda || !quadra || !ramal || !quantidade || !dataRetroativa || !horaRetroativa) { 
       return Alert.alert("Aviso", "Preencha todos os campos, incluindo a Data e Hora!"); 
@@ -211,23 +256,20 @@ export default function RetroativoScreen() {
     if (dataRetroativa.length !== 10) return Alert.alert("Erro", "Formato de data inválido. Use DD/MM/AAAA");
     if (horaRetroativa.length !== 5) return Alert.alert("Erro", "Formato de hora inválido. Use HH:MM");
 
-    // 👉 NÃO TEM MAIS TRAVA DE HORÁRIO! LIBERADO TOTALMENTE!
     const numRamal = ramal.trim();
-    const ramalInfo = ramaisDisponiveis.find(r => String(r.ramal) === numRamal);
+    
+    // Busca direto no mapa completo para não falhar durante a edição
+    const ramalInfo = mapaCompleto.find(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === numRamal);
     if (!ramalInfo) {
       return Alert.alert("❌ Ramal Inválido", "Este ramal não está cadastrado nesta fazenda e quadra!");
     }
 
-    const isServicoAtualCoringa = servicoSelecionadoCompleto?.is_coringa === true;
-
-    if (ramalInfo.servico_permitido && servico !== ramalInfo.servico_permitido && !isServicoAtualCoringa) { 
-      return Alert.alert("❌ Bloqueado", `O ramal ${numRamal} só aceita: ${ramalInfo.servico_permitido}.`); 
-    }
+    // 👉 REMOVIDA A TRAVA DE SERVIÇOS DO MAPA. Qualquer serviço é aceito!
 
     // Formata a data e hora digitada pelo usuário
     const [dia, mes, ano] = dataRetroativa.split('/');
     const hojeISO = `${ano}-${mes}-${dia}`;
-    const dataIsoFinal = `${hojeISO}T${horaRetroativa}:00.000Z`; // String combinada
+    const dataIsoFinal = `${hojeISO}T${horaRetroativa}:00.000Z`; // String combinada da data que o usuário escolheu
 
     if (ramalInfo.data_bloqueio && hojeISO !== ramalInfo.data_bloqueio) { 
       return Alert.alert("📅 Data Bloqueada", `Ramal ${numRamal} permitido apenas em: ${new Date(ramalInfo.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
@@ -252,11 +294,18 @@ export default function RetroativoScreen() {
         quantidade: parseInt(quantidade), 
         valor_unitario: valorUnitario, 
         valor_total: valorTotalCalculado, 
-        data: dataIsoFinal, // 👉 SALVANDO A DATA/HORA RETROATIVA
+        data: dataIsoFinal, // 👉 SALVA A DATA/HORA RETROATIVA MESMO NA EDIÇÃO
         fiscal_nome: perfilLogado?.nome || 'Fiscal Não Identificado' 
       };
 
-      const novaLista = [...lancamentosPendentes, novoLancamento];
+      let novaLista = [...lancamentosPendentes];
+      
+      if (indexEdicao !== null) {
+        novaLista[indexEdicao] = novoLancamento; // Se é edição, substitui
+      } else {
+        novaLista.push(novoLancamento); // Se é novo, adiciona ao fim
+      }
+
       await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
       setLancamentosPendentes(novaLista);
 
@@ -265,6 +314,8 @@ export default function RetroativoScreen() {
       setRamal(''); 
       setQuantidade(''); 
       setValorTotalCalculado(0);
+      setIndexEdicao(null);
+      setDataOriginalEdicao(null);
     } catch (e) {
       Alert.alert("Erro", "Não foi possível salvar no celular.");
     } finally {
@@ -297,10 +348,25 @@ export default function RetroativoScreen() {
   };
 
   const excluirLancamentoPendente = async (index: number) => {
-    const novaLista = [...lancamentosPendentes];
-    novaLista.splice(index, 1);
-    await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
-    setLancamentosPendentes(novaLista);
+    Alert.alert(
+      "Excluir Lançamento",
+      "Tem certeza que deseja apagar este registro?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Apagar", 
+          style: "destructive",
+          onPress: async () => {
+            const novaLista = [...lancamentosPendentes];
+            novaLista.splice(index, 1);
+            await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
+            setLancamentosPendentes(novaLista);
+            // Se o usuário apagar o item que estava editando, limpa a edição
+            if (indexEdicao === index) cancelarEdicao();
+          }
+        }
+      ]
+    );
   };
 
   const loteAtualColaborador = lancamentosPendentes.filter(l => l.colaborador === colaborador);
@@ -328,7 +394,7 @@ export default function RetroativoScreen() {
           </View>
 
           <View style={styles.header}>
-            <Text style={styles.title}>Brekaz Retroativo ⏳</Text>
+            <Text style={styles.title}>Fazenda Acauã Retroativo ⏳</Text>
             <Text style={styles.subtitle}>Lançamentos com data/hora manuais</Text>
             <Relogio onAtualizar={atualizarMochilaManual} />
           </View>
@@ -338,20 +404,26 @@ export default function RetroativoScreen() {
               <Text style={styles.syncTexto}>📦 {lancamentosPendentes.length} no total aguardando envio</Text>
               <View style={styles.syncBotoesRow}>
                 <TouchableOpacity style={styles.btnSyncVer} onPress={() => setModalPendentesVisivel(true)}>
-                  <Text style={styles.btnSyncVerTexto}>✏️ VER TODOS</Text>
+                  <Text style={styles.btnSyncVerTexto}>✏️ VER / EDITAR</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando}>
-                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={styles.btnSyncTexto}>🚀 ENVIAR TUDO</Text>}
+                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando || indexEdicao !== null}>
+                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={[styles.btnSyncTexto, indexEdicao !== null && {color: '#95A5A6'}]}>🚀 ENVIAR TUDO</Text>}
                 </TouchableOpacity>
               </View>
             </View>
           )}
 
-          <View style={styles.card}>
+          <View style={[styles.card, indexEdicao !== null && { borderColor: '#F1C40F', borderWidth: 2 }]}>
             {carregandoDados ? (
               <ActivityIndicator size="large" color="#27AE60" />
             ) : (
               <>
+                {indexEdicao !== null && (
+                  <View style={styles.edicaoAviso}>
+                    <Text style={styles.edicaoAvisoTexto}>⚠️ MODO DE EDIÇÃO ATIVADO</Text>
+                  </View>
+                )}
+
                 <Text style={styles.label}>Colaborador:</Text>
                 <View style={styles.pickerContainer}>
                   <Picker selectedValue={colaborador} onValueChange={setColaborador} style={styles.picker}>
@@ -434,15 +506,25 @@ export default function RetroativoScreen() {
                   </View>
                 )}
 
-                <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
-                  {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>➕ ADICIONAR AO LOTE</Text>}
-                </TouchableOpacity>
+                {indexEdicao !== null ? (
+                  <View style={styles.rowBotoesEdicao}>
+                    <TouchableOpacity style={[styles.button, styles.btnCancelarEdicao]} onPress={cancelarEdicao}>
+                      <Text style={styles.buttonText}>❌ CANCELAR</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.button, styles.btnSalvarEdicao, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
+                      {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>💾 SALVAR</Text>}
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
+                    {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>➕ ADICIONAR AO LOTE</Text>}
+                  </TouchableOpacity>
+                )}
 
-                {colaborador !== '' && loteAtualColaborador.length > 0 && (
+                {colaborador !== '' && loteAtualColaborador.length > 0 && indexEdicao === null && (
                   <View style={styles.loteContainer}>
                     <Text style={styles.loteTitulo}>📝 Lote de {colaborador}:</Text>
                     {loteAtualColaborador.map((lote, index) => {
-                      // Extrai apenas a data para mostrar no carrinho
                       const dataVisor = lote.data.split('T')[0].split('-').reverse().join('/');
                       return (
                         <View key={index} style={styles.loteItem}>
@@ -506,6 +588,9 @@ export default function RetroativoScreen() {
                           <Text style={styles.itemDetalhes}>{item.servico} | Qtd: {item.quantidade} | R$ {item.valor_total.toFixed(2)}</Text>
                         </View>
                         <View style={styles.itemAcoes}>
+                          <TouchableOpacity style={styles.btnEditarPendente} onPress={() => prepararEdicao(index)}>
+                            <Text style={styles.btnAcaoTexto}>✏️</Text>
+                          </TouchableOpacity>
                           <TouchableOpacity style={styles.btnApagarPendente} onPress={() => excluirLancamentoPendente(index)}>
                             <Text style={styles.btnAcaoTexto}>🗑️</Text>
                           </TouchableOpacity>
@@ -563,12 +648,20 @@ const styles = StyleSheet.create({
   button: { backgroundColor: '#2980B9', padding: 18, borderRadius: 8, alignItems: 'center', marginTop: 15 },
   buttonDisabled: { backgroundColor: '#95A5A6' },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  
+  edicaoAviso: { backgroundColor: '#FCF3CF', padding: 10, borderRadius: 8, marginBottom: 15, alignItems: 'center' },
+  edicaoAvisoTexto: { color: '#D35400', fontWeight: 'bold', fontSize: 12 },
+  rowBotoesEdicao: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
+  btnCancelarEdicao: { flex: 1, marginRight: 10, backgroundColor: '#E74C3C', marginTop: 0 },
+  btnSalvarEdicao: { flex: 1, backgroundColor: '#27AE60', marginTop: 0 },
+
   loteContainer: { marginTop: 25, backgroundColor: '#F9EBEA', padding: 15, borderRadius: 10, borderLeftWidth: 4, borderLeftColor: '#E74C3C' },
   loteTitulo: { fontSize: 15, fontWeight: 'bold', color: '#C0392B', marginBottom: 10 },
   loteItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10, gap: 8 },
   loteItemTextoBold: { fontSize: 14, fontWeight: 'bold', color: '#2C3E50' },
   loteItemTexto: { fontSize: 13, color: '#34495E', marginTop: 2 },
   loteDica: { fontSize: 11, color: '#7F8C8D', fontStyle: 'italic', marginTop: 10, textAlign: 'center' },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalContent: { backgroundColor: '#FFF', width: '100%', borderRadius: 15, padding: 20, elevation: 10 },
   modalContentGrande: { backgroundColor: '#FFF', width: '100%', borderRadius: 15, padding: 20, elevation: 10, flex: 0.9 },
@@ -581,6 +674,7 @@ const styles = StyleSheet.create({
   itemColab: { fontSize: 16, fontWeight: 'bold', color: '#2C3E50' },
   itemDetalhes: { fontSize: 13, color: '#7F8C8D', marginTop: 2 },
   itemAcoes: { flexDirection: 'row', gap: 10 },
+  btnEditarPendente: { backgroundColor: '#F1C40F', padding: 10, borderRadius: 8 },
   btnApagarPendente: { backgroundColor: '#E74C3C', padding: 10, borderRadius: 8 },
   btnAcaoTexto: { fontSize: 16 },
   btnFecharModal: { backgroundColor: '#95A5A6', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 15 },

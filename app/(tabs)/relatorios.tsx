@@ -1,9 +1,59 @@
 import { Picker } from '@react-native-picker/picker';
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
+
+// 👉 ALGORITMO OFFLINE DE FERIADOS NACIONAIS (Fixos + Móveis como Páscoa e Carnaval)
+const obterFeriadosNacionais = (ano: number) => {
+  const feriados = [
+    '01/01', // Confraternização Universal
+    '21/04', // Tiradentes
+    '01/05', // Dia do Trabalhador
+    '07/09', // Independência do Brasil
+    '12/10', // Nossa Senhora Aparecida
+    '02/11', // Finados
+    '15/11', // Proclamação da República
+    '20/11', // Consciência Negra
+    '25/12'  // Natal
+  ];
+
+  // Cálculo exato da Páscoa
+  const a = ano % 19;
+  const b = Math.floor(ano / 100);
+  const c = ano % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f_calc = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f_calc + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const mesPascoa = Math.floor((h + l - 7 * m + 114) / 31);
+  const diaPascoa = ((h + l - 7 * m + 114) % 31) + 1;
+
+  const pascoa = new Date(ano, mesPascoa - 1, diaPascoa);
+
+  const addDias = (data: Date, dias: number) => {
+    const r = new Date(data);
+    r.setDate(r.getDate() + dias);
+    return r;
+  };
+
+  const formatar = (dts: Date) => `${String(dts.getDate()).padStart(2, '0')}/${String(dts.getMonth() + 1).padStart(2, '0')}`;
+
+  feriados.push(formatar(addDias(pascoa, -47))); // Carnaval
+  feriados.push(formatar(addDias(pascoa, -2)));  // Sexta-feira Santa
+  feriados.push(formatar(addDias(pascoa, 60)));  // Corpus Christi
+
+  // Converte para o formato ISO (YYYY-MM-DD) para facilitar a comparação no código
+  return feriados.map(dMes => `${ano}-${dMes.split('/')[1]}-${dMes.split('/')[0]}`);
+};
 
 export default function RelatoriosScreen() {
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState('');
@@ -91,11 +141,49 @@ export default function RelatoriosScreen() {
 
     if (!dtInicioBD || !dtFimBD) return Alert.alert('Erro', 'Use o formato DD/MM/AAAA para as datas.');
 
-    const arrayFeriados = feriados.split(',').map(d => d.trim().padStart(2, '0')).filter(d => d !== '00');
+    const arrayFeriadosManuais = feriados.split(',').map(d => d.trim().padStart(2, '0')).filter(d => d !== '00');
+    
+    const anoInicial = parseInt(dtInicioBD.split('-')[0], 10);
+    const anoFinal = parseInt(dtFimBD.split('-')[0], 10);
+    let listaFeriadosNacionais = obterFeriadosNacionais(anoInicial);
+    
+    if (anoInicial !== anoFinal) {
+      listaFeriadosNacionais = [...listaFeriadosNacionais, ...obterFeriadosNacionais(anoFinal)];
+    }
 
     setGerando(true);
 
     try {
+      // 👉 CARREGAMENTO DO LOGO À PROVA DE BALAS (EXPO GO + APK + WEB)
+      let base64Logo = '';
+      try {
+        const asset = Asset.fromModule(require('../../assets/images/logo.png'));
+        await asset.downloadAsync();
+        
+        if (Platform.OS === 'web') {
+          base64Logo = asset.uri;
+        } else {
+          let uriDaImagem = asset.localUri || asset.uri;
+          
+          // Se for Expo Go (http), o Android bloqueia. Resolvemos baixando o arquivo fisicamente!
+          if (uriDaImagem.startsWith('http')) {
+            const { uri } = await FileSystem.downloadAsync(
+              uriDaImagem,
+              FileSystem.cacheDirectory + 'logo_temp_pdf.png'
+            );
+            uriDaImagem = uri;
+          }
+          
+          // Converte para Base64 puro. O HTML renderiza nativamente sem bloqueios de segurança do Android.
+          const base64 = await FileSystem.readAsStringAsync(uriDaImagem, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          base64Logo = `data:image/png;base64,${base64}`;
+        }
+      } catch (imgErr) {
+        console.warn("Aviso: Não foi possível carregar a logo para o PDF.", imgErr);
+      }
+
       let query = supabase.from('diarios_campo').select('*')
         .gte('data', `${dtInicioBD} 00:00:00`)
         .lte('data', `${dtFimBD} 23:59:59`)
@@ -156,15 +244,10 @@ export default function RelatoriosScreen() {
         const dadosDoColaborador = listaColaboradores.find(c => limparNome(c.nome) === nomeLimpoFolha);
         
         let dataAdmissaoIsoStr: string | null = null;
-        let dataAdmissaoCabecalho = 'NÃO ENCONTRADA';
 
         if (dadosDoColaborador) {
           const adm = dadosDoColaborador.data_admissao || dadosDoColaborador.created_at;
           dataAdmissaoIsoStr = extrairAdmissaoISO(adm);
-          if (dataAdmissaoIsoStr) {
-            const p = dataAdmissaoIsoStr.split('-');
-            dataAdmissaoCabecalho = `${p[2]}/${p[1]}/${p[0]}`;
-          }
         }
 
         let linhasTabela = '';
@@ -200,18 +283,19 @@ export default function RelatoriosScreen() {
               `;
             });
           } else {
-            const isFeriado = arrayFeriados.includes(diaMesStr);
+            const isFeriadoManual = arrayFeriadosManuais.includes(diaMesStr);
+            const isFeriadoNacional = listaFeriadosNacionais.includes(isoDate);
+            const isFeriado = isFeriadoNacional || isFeriadoManual;
+
             const isFerias = feriasDB?.some((f: any) => 
               f.colaborador_nome === folha.nome && 
               isoDate >= f.data_inicio && 
               isoDate <= f.data_fim
             );
             
-            // 👉 Comparação blindada (Ex: "2026-06-01" < "2026-06-04")
             const isAntesAdmissao = dataAdmissaoIsoStr !== null && (isoDate < dataAdmissaoIsoStr);
             
             if (isAntesAdmissao) {
-              // Deixa a linha completamente em branco, conforme solicitado!
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #F4F6F6;"></td></tr>`;
             } else if (isFerias) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FEF9E7; color: #F39C12; font-weight: bold; letter-spacing: 2px;">FÉRIAS</td></tr>`;
@@ -231,12 +315,12 @@ export default function RelatoriosScreen() {
         const pagina = `
           <div class="page-container">
             <div class="header-container">
+              ${base64Logo ? `<div class="header-logo"><img src="${base64Logo}" alt="Logo" /></div>` : ''}
               <div class="header-left">
                 <p>Período: <strong>${dataInicio} até ${dataFim}</strong></p>
                 <p>Encarregado: <strong style="text-transform: uppercase;">${encarregadoNome}</strong></p>
                 ${folha.tipo === 'Registrado' ? '' : `<p>Produção: <strong style="color: #E74C3C; text-transform: uppercase;">${folha.tipo}</strong></p>`}
                 <p>Colaborador: <strong style="font-size: 16px; text-transform: uppercase;">${folha.nome}</strong></p>
-                <p style="color: #7F8C8D; font-size: 12px; margin-top: 5px;">Admissão Registrada: <strong>${dataAdmissaoCabecalho}</strong></p>
               </div>
               <div class="header-right">
                 <p><strong>Luiz Felipe Areovaldo Calhim Manoel Abud</strong></p>
@@ -289,11 +373,15 @@ export default function RelatoriosScreen() {
         <!DOCTYPE html>
         <html>
           <head>
+            <title>Relatório de Produção - ${colaboradorSelecionado}</title>
             <style>
               @page { margin: 15mm; size: A4; }
               body { font-family: 'Arial', sans-serif; font-size: 13px; color: #000; background-color: #FFF; margin: 0; padding: 0; }
               .quebra-pagina { page-break-after: always; }
-              .header-container { display: flex; justify-content: space-between; margin-bottom: 25px; border-bottom: 2px solid #000; padding-bottom: 15px; }
+              .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 25px; border-bottom: 2px solid #000; padding-bottom: 15px; }
+              .header-logo { margin-right: 15px; display: flex; align-items: center; justify-content: center; }
+              .header-logo img { max-height: 80px; max-width: 120px; object-fit: contain; }
+              .header-left { flex: 1; }
               .header-left p, .header-right p { margin: 4px 0; font-size: 14px; }
               .header-right { text-align: right; }
               table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
@@ -311,8 +399,37 @@ export default function RelatoriosScreen() {
         </html>
       `;
 
-      const { uri } = await Print.printToFileAsync({ html: htmlCompleto });
-      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      // 👉 BIFURCAÇÃO PERFEITA WEB x MOBILE
+      if (Platform.OS === 'web') {
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'absolute';
+        iframe.style.width = '0px';
+        iframe.style.height = '0px';
+        iframe.style.border = 'none';
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (doc) {
+          doc.open();
+          doc.write(htmlCompleto);
+          doc.close();
+        }
+
+        setTimeout(() => {
+          if (iframe.contentWindow) {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+          }
+          setTimeout(() => {
+            document.body.removeChild(iframe);
+          }, 1000);
+        }, 500);
+
+      } else {
+        // No ANDROID / iOS:
+        const { uri } = await Print.printToFileAsync({ html: htmlCompleto });
+        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      }
 
     } catch (err: any) {
       Alert.alert('Erro', 'Ocorreu um problema ao gerar o PDF: ' + err.message);
@@ -340,12 +457,12 @@ export default function RelatoriosScreen() {
           </View>
         </View>
 
-        <Text style={styles.label}>Feriados no mês (Apenas os dias):</Text>
+        <Text style={styles.label}>Feriados Municipais/Locais (Apenas os dias):</Text>
         <TextInput 
           style={styles.input} 
           value={feriados} 
           onChangeText={setFeriados} 
-          placeholder="Ex: 01, 15, 21 (Deixe em branco se não houver)" 
+          placeholder="Ex: 01, 15 (Nacionais já são automáticos)" 
           keyboardType="numbers-and-punctuation" 
         />
 

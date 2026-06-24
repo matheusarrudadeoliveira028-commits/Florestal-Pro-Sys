@@ -1,12 +1,18 @@
 import { Picker } from '@react-native-picker/picker';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
 export default function FechamentoScreen() {
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState('');
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
   
+  // DADOS DE BASE PARA EDIÇÃO
+  const [listaServicos, setListaServicos] = useState<any[]>([]);
+  const [mapaCompleto, setMapaCompleto] = useState<any[]>([]);
+  const [fazendasDisponiveis, setFazendasDisponiveis] = useState<string[]>([]);
+  const [quadrasDisponiveis, setQuadrasDisponiveis] = useState<string[]>([]);
+
   // DADOS
   const [dadosCompletosUsuario, setDadosCompletosUsuario] = useState<any[]>([]);
   const [extrato, setExtrato] = useState<any[]>([]);
@@ -21,15 +27,22 @@ export default function FechamentoScreen() {
   const [totalGanho, setTotalGanho] = useState(0);
   const [totalPes, setTotalPes] = useState(0);
 
-  // ESTADOS DO MODAL DE EDIÇÃO
+  // ESTADOS DO MODAL DE EDIÇÃO 100%
   const [modalEdicaoVisivel, setModalEdicaoVisivel] = useState(false);
   const [itemEditando, setItemEditando] = useState<any>(null);
+  
+  const [editData, setEditData] = useState('');
+  const [editHora, setEditHora] = useState('');
+  const [editServico, setEditServico] = useState('');
+  const [editFazenda, setEditFazenda] = useState('');
+  const [editQuadra, setEditQuadra] = useState('');
+  const [editRamal, setEditRamal] = useState('');
   const [editQuantidade, setEditQuantidade] = useState('');
   const [editDiasAtestado, setEditDiasAtestado] = useState('');
   const [salvandoEdicao, setSalvandoEdicao] = useState(false);
 
   useEffect(() => {
-    carregarEquipe();
+    carregarDadosBase();
   }, []);
 
   useEffect(() => {
@@ -45,17 +58,36 @@ export default function FechamentoScreen() {
     }
   }, [colaboradorSelecionado]);
 
-  const carregarEquipe = async () => {
+  // Atualiza as quadras disponíveis ao trocar a fazenda no modal
+  useEffect(() => {
+    if (editFazenda) {
+      setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === editFazenda).map(m => m.quadra))] as string[]);
+    } else {
+      setQuadrasDisponiveis([]);
+    }
+  }, [editFazenda, mapaCompleto]);
+
+  const carregarDadosBase = async () => {
     setCarregandoDados(true);
-    const { data } = await supabase.from('colaboradores').select('*').order('nome');
-    if (data) setListaColaboradores(data);
+    
+    // Busca equipes, serviços e mapas para poder editar qualquer coisa
+    const { data: colabs } = await supabase.from('colaboradores').select('*').order('nome');
+    const { data: servs } = await supabase.from('servicos').select('*').order('nome');
+    const { data: mapa } = await supabase.from('mapa_fazendas').select('*');
+
+    if (colabs) setListaColaboradores(colabs);
+    if (servs) setListaServicos(servs);
+    if (mapa) {
+      setMapaCompleto(mapa);
+      setFazendasDisponiveis([...new Set(mapa.map(item => item.fazenda))] as string[]);
+    }
+    
     setCarregandoDados(false);
   };
 
   const buscarExtratoColaborador = async () => {
     setBuscandoExtrato(true);
     
-    // SE FOR 'TODOS', BUSCA A FOLHA DA FAZENDA INTEIRA
     let query = supabase.from('diarios_campo').select('*').order('data', { ascending: false });
     
     if (colaboradorSelecionado !== 'TODOS') {
@@ -78,6 +110,12 @@ export default function FechamentoScreen() {
     if (v.length > 2) v = v.substring(0, 2) + '/' + v.substring(2);
     if (v.length > 5) v = v.substring(0, 5) + '/' + v.substring(5, 9);
     return v;
+  };
+
+  const formatarHoraInput = (texto: string) => {
+    let v = texto.replace(/\D/g, '');
+    if (v.length > 2) v = v.replace(/^(\d{2})(\d)/, '$1:$2');
+    return v.substring(0, 5);
   };
 
   const aplicarFiltrosEAtualizarTotais = (dadosBase: any[], inicio: string, fim: string) => {
@@ -142,215 +180,332 @@ export default function FechamentoScreen() {
     }
   };
 
-  // FUNÇÕES DE EDIÇÃO
+  // FUNÇÕES DE EDIÇÃO 100%
   const abrirEdicao = (item: any) => {
-    if (item.servico === 'Falta') {
-      return Alert.alert("Aviso", "Faltas não possuem valores para editar. Se lançou errado, exclua o registro.");
-    }
     setItemEditando(item);
-    setEditQuantidade(item.quantidade ? item.quantidade.toString() : '0');
+    
+    // Popula o formulário com os dados exatos do banco
+    setEditServico(item.servico || '');
+    setEditFazenda(item.fazenda || '');
+    setEditQuadra(item.quadra || '');
+    setEditRamal(item.ramal ? item.ramal.toString() : '');
+    setEditQuantidade(item.quantidade ? item.quantidade.toString() : '');
     setEditDiasAtestado(item.dias_atestado ? item.dias_atestado.toString() : '');
+
+    try {
+      const dataBruta = item.data || item.created_at;
+      const [datePart, timePart] = dataBruta.split('T');
+      const [ano, mes, dia] = datePart.split('-');
+      setEditData(`${dia}/${mes}/${ano}`);
+      setEditHora(timePart ? timePart.substring(0, 5) : '12:00');
+    } catch(e) {
+      setEditData('');
+      setEditHora('');
+    }
+
     setModalEdicaoVisivel(true);
   };
 
   const salvarEdicao = async () => {
+    if (editData.length !== 10) return Alert.alert("Erro", "A data deve estar no formato DD/MM/AAAA");
+    if (editHora.length !== 5) return Alert.alert("Erro", "A hora deve estar no formato HH:MM");
+
     setSalvandoEdicao(true);
+    
+    const [dia, mes, ano] = editData.split('/');
+    const novaDataIso = `${ano}-${mes}-${dia}T${editHora}:00.000Z`;
+
     let updates: any = {};
 
-    if (itemEditando.servico === 'Atestado') {
-      updates = { dias_atestado: parseInt(editDiasAtestado) || 0 };
+    if (editServico === 'Falta') {
+      updates = {
+        servico: 'Falta',
+        data: novaDataIso,
+        fazenda: null,
+        quadra: null,
+        ramal: null,
+        quantidade: 0,
+        valor_total: 0,
+        valor_unitario: 0,
+        dias_atestado: 0
+      };
+    } else if (editServico === 'Atestado') {
+      updates = {
+        servico: 'Atestado',
+        data: novaDataIso,
+        dias_atestado: parseInt(editDiasAtestado) || 0,
+        fazenda: null,
+        quadra: null,
+        ramal: null,
+        quantidade: 0,
+        valor_total: 0,
+        valor_unitario: 0
+      };
     } else {
-      const novaQtd = parseInt(editQuantidade) || 0;
-      const novoTotalDinheiro = novaQtd * (itemEditando.valor_unitario || 0);
-      updates = { quantidade: novaQtd, valor_total: novoTotalDinheiro };
+      if (!editFazenda || !editQuadra || !editRamal || !editQuantidade) {
+        setSalvandoEdicao(false);
+        return Alert.alert("Aviso", "Preencha Fazenda, Quadra, Ramal e Quantidade.");
+      }
+
+      // Recalcula o valor com base na tabela mestre de serviços atualizada
+      const servicoReferencia = listaServicos.find(s => s.nome === editServico);
+      let valUnitario = servicoReferencia?.preco_base || 0;
+      if (servicoReferencia?.tipo_cobranca === 'milheiro') valUnitario = valUnitario / 1000;
+      
+      const qtdNova = parseInt(editQuantidade) || 0;
+
+      updates = {
+        servico: editServico,
+        data: novaDataIso,
+        fazenda: editFazenda,
+        quadra: editQuadra,
+        ramal: editRamal.trim(),
+        quantidade: qtdNova,
+        valor_unitario: valUnitario,
+        valor_total: qtdNova * valUnitario,
+        dias_atestado: 0
+      };
     }
 
     const { error } = await supabase.from('diarios_campo').update(updates).eq('id', itemEditando.id);
     
     setSalvandoEdicao(false);
     if (error) {
-      Alert.alert("Erro", "Falha ao editar.");
+      Alert.alert("Erro", "Falha ao editar o lançamento.");
     } else {
-      Alert.alert("✅ Atualizado", "O lançamento foi corrigido.");
+      Alert.alert("✅ Sucesso", "O lançamento foi completamente atualizado!");
       setModalEdicaoVisivel(false);
-      buscarExtratoColaborador(); // Recarrega os dados corrigidos
+      buscarExtratoColaborador(); // Recarrega os dados corrigidos na tabela e soma os totais
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Folha de Pagamento 💰</Text>
-        <Text style={styles.subtitle}>Conferência e Fechamento de Caixa</Text>
-      </View>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Folha de Pagamento 💰</Text>
+          <Text style={styles.subtitle}>Conferência e Fechamento de Caixa</Text>
+        </View>
 
-      <View style={styles.filtroCard}>
-        <Text style={styles.label}>Selecione a Visão:</Text>
-        <View style={styles.pickerContainer}>
-          {carregandoDados ? (
-            <ActivityIndicator color="#34495E" style={{margin: 10}} />
-          ) : (
-            <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado}>
-              <Picker.Item label="Selecione um funcionário ou todos..." value="" />
-              <Picker.Item label="🌟 TODOS OS COLABORADORES (TOTAL GERAL)" value="TODOS" />
-              {listaColaboradores.map(c => <Picker.Item key={c.id} label={c.nome} value={c.nome} />)}
-            </Picker>
+        <View style={styles.filtroCard}>
+          <Text style={styles.label}>Selecione a Visão:</Text>
+          <View style={styles.pickerContainer}>
+            {carregandoDados ? (
+              <ActivityIndicator color="#34495E" style={{margin: 10}} />
+            ) : (
+              <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado}>
+                <Picker.Item label="Selecione um funcionário ou todos..." value="" />
+                <Picker.Item label="🌟 TODOS OS COLABORADORES (TOTAL GERAL)" value="TODOS" />
+                {listaColaboradores.map(c => <Picker.Item key={c.id} label={c.nome} value={c.nome} />)}
+              </Picker>
+            )}
+          </View>
+
+          {colaboradorSelecionado !== '' && (
+            <View style={styles.blocoDatas}>
+              <Text style={styles.labelData}>Filtrar por Período (Opcional):</Text>
+              <View style={styles.row}>
+                <View style={styles.colData}>
+                  <TextInput 
+                    style={styles.inputData} 
+                    placeholder="De: DD/MM/AAAA" 
+                    placeholderTextColor="#95A5A6"
+                    keyboardType="numeric"
+                    value={dataInicio}
+                    onChangeText={(t) => setDataInicio(formatarDataInput(t))}
+                    maxLength={10}
+                  />
+                </View>
+                <View style={styles.colData}>
+                  <TextInput 
+                    style={styles.inputData} 
+                    placeholder="Até: DD/MM/AAAA" 
+                    placeholderTextColor="#95A5A6"
+                    keyboardType="numeric"
+                    value={dataFim}
+                    onChangeText={(t) => setDataFim(formatarDataInput(t))}
+                    maxLength={10}
+                  />
+                </View>
+              </View>
+              <TouchableOpacity style={styles.btnFiltrar} onPress={acionarFiltroManual}>
+                <Text style={styles.btnFiltrarTexto}>🔍 APLICAR FILTRO E SOMAR</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
         {colaboradorSelecionado !== '' && (
-          <View style={styles.blocoDatas}>
-            <Text style={styles.labelData}>Filtrar por Período (Opcional):</Text>
-            <View style={styles.row}>
-              <View style={styles.colData}>
-                <TextInput 
-                  style={styles.inputData} 
-                  placeholder="De: DD/MM/AAAA" 
-                  placeholderTextColor="#95A5A6"
-                  keyboardType="numeric"
-                  value={dataInicio}
-                  onChangeText={(t) => setDataInicio(formatarDataInput(t))}
-                  maxLength={10}
-                />
-              </View>
-              <View style={styles.colData}>
-                <TextInput 
-                  style={styles.inputData} 
-                  placeholder="Até: DD/MM/AAAA" 
-                  placeholderTextColor="#95A5A6"
-                  keyboardType="numeric"
-                  value={dataFim}
-                  onChangeText={(t) => setDataFim(formatarDataInput(t))}
-                  maxLength={10}
-                />
-              </View>
-            </View>
-            <TouchableOpacity style={styles.btnFiltrar} onPress={acionarFiltroManual}>
-              <Text style={styles.btnFiltrarTexto}>🔍 APLICAR FILTRO E SOMAR</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {colaboradorSelecionado !== '' && (
-        <>
-          <View style={styles.resumoCard}>
-            <Text style={styles.resumoAvisoGlobal}>
-              {colaboradorSelecionado === 'TODOS' ? 'VALOR TOTAL DA FAZENDA' : `RESUMO: ${colaboradorSelecionado.toUpperCase()}`}
-            </Text>
-            <View style={styles.resumoRow}>
-              <View style={styles.resumoBox}>
-                <Text style={styles.resumoTitulo}>Total Produzido</Text>
-                <Text style={styles.resumoValorAzul}>{totalPes.toLocaleString('pt-BR')} pés</Text>
-              </View>
-              <View style={styles.resumoBox}>
-                <Text style={styles.resumoTitulo}>Valor de Pagamento</Text>
-                <Text style={styles.resumoValorVerde}>R$ {totalGanho.toFixed(2).replace('.', ',')}</Text>
-              </View>
-            </View>
-            {(dataInicio || dataFim) && (
-              <Text style={styles.avisoFiltroAtivo}>
-                Mostrando resultados {dataInicio ? `de ${dataInicio}` : ''} {dataFim ? `até ${dataFim}` : ''}
+          <>
+            <View style={styles.resumoCard}>
+              <Text style={styles.resumoAvisoGlobal}>
+                {colaboradorSelecionado === 'TODOS' ? 'VALOR TOTAL DA FAZENDA' : `RESUMO: ${colaboradorSelecionado.toUpperCase()}`}
               </Text>
-            )}
-          </View>
+              <View style={styles.resumoRow}>
+                <View style={styles.resumoBox}>
+                  <Text style={styles.resumoTitulo}>Total Produzido</Text>
+                  <Text style={styles.resumoValorAzul}>{totalPes.toLocaleString('pt-BR')} pés</Text>
+                </View>
+                <View style={styles.resumoBox}>
+                  <Text style={styles.resumoTitulo}>Valor de Pagamento</Text>
+                  <Text style={styles.resumoValorVerde}>R$ {totalGanho.toFixed(2).replace('.', ',')}</Text>
+                </View>
+              </View>
+              {(dataInicio || dataFim) && (
+                <Text style={styles.avisoFiltroAtivo}>
+                  Mostrando resultados {dataInicio ? `de ${dataInicio}` : ''} {dataFim ? `até ${dataFim}` : ''}
+                </Text>
+              )}
+            </View>
 
-          <Text style={styles.listaTitulo}>Histórico de Lançamentos</Text>
+            <Text style={styles.listaTitulo}>Histórico de Lançamentos</Text>
 
-          {buscandoExtrato ? (
-            <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 20}} />
-          ) : extrato.length === 0 ? (
-            <Text style={styles.vazioTexto}>Nenhum registro encontrado neste período.</Text>
-          ) : (
-            extrato.map((item) => {
-              const isFalta = item.servico === 'Falta';
-              const isAtestado = item.servico === 'Atestado';
-              const dataExibicao = item.data ? new Date(item.data) : new Date(item.created_at);
+            {buscandoExtrato ? (
+              <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 20}} />
+            ) : extrato.length === 0 ? (
+              <Text style={styles.vazioTexto}>Nenhum registro encontrado neste período.</Text>
+            ) : (
+              extrato.map((item) => {
+                const isFalta = item.servico === 'Falta';
+                const isAtestado = item.servico === 'Atestado';
+                const dataExibicao = item.data ? new Date(item.data) : new Date(item.created_at);
 
-              return (
-                <View key={item.id} style={[styles.lancamentoCard, isFalta ? styles.cardFalta : isAtestado ? styles.cardAtestado : null]}>
-                  
-                  <View style={styles.lancamentoTopo}>
-                    <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0,5)}</Text>
-                    <Text style={[styles.lancamentoServico, isFalta ? {color: '#C0392B'} : isAtestado ? {color: '#2980B9'} : null]}>
-                      {item.servico}
-                    </Text>
+                return (
+                  <View key={item.id} style={[styles.lancamentoCard, isFalta ? styles.cardFalta : isAtestado ? styles.cardAtestado : null]}>
+                    
+                    <View style={styles.lancamentoTopo}>
+                      <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0,5)}</Text>
+                      <Text style={[styles.lancamentoServico, isFalta ? {color: '#C0392B'} : isAtestado ? {color: '#2980B9'} : null]}>
+                        {item.servico}
+                      </Text>
+                    </View>
+
+                    {colaboradorSelecionado === 'TODOS' && (
+                      <Text style={styles.detalheTexto}>👤 Funcionário: {item.colaborador}</Text>
+                    )}
+
+                    {!isFalta && !isAtestado && (
+                      <View style={styles.lancamentoDetalhes}>
+                        <Text style={styles.detalheTexto}>📍 Fazenda: {item.fazenda} | Qd: {item.quadra} | Rm: {item.ramal}</Text>
+                        <View style={styles.linhaValores}>
+                          <Text style={styles.detalheQtd}>Qtd: {item.quantidade} pés</Text>
+                          <Text style={styles.detalheValor}>+ R$ {item.valor_total.toFixed(2).replace('.', ',')}</Text>
+                        </View>
+                      </View>
+                    )}
+
+                    {isAtestado && (
+                      <View style={styles.lancamentoDetalhes}>
+                        <Text style={styles.detalheTexto}>🏥 Data: {item.data_atestado || '-'} | Duração: {item.dias_atestado} dias</Text>
+                        <Text style={styles.detalheTexto}>🩺 CID: {item.cid_atestado || '-'}</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.acoesRow}>
+                      <TouchableOpacity style={styles.btnEditar} onPress={() => abrirEdicao(item)}>
+                        <Text style={styles.btnEditarTexto}>✏️ Editar</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity style={styles.btnExcluir} onPress={() => confirmarExclusao(item.id, item.servico, item.data || item.created_at)}>
+                        <Text style={styles.btnExcluirTexto}>🗑️ Excluir</Text>
+                      </TouchableOpacity>
+                    </View>
+
                   </View>
+                );
+              })
+            )}
+          </>
+        )}
 
-                  {/* Mostra de quem é o lançamento se estiver na visão global */}
-                  {colaboradorSelecionado === 'TODOS' && (
-                    <Text style={styles.detalheTexto}>👤 Funcionário: {item.colaborador}</Text>
-                  )}
+        {/* MODAL DE EDIÇÃO 100% */}
+        <Modal visible={modalEdicaoVisivel} transparent={true} animationType="slide">
+          <View style={styles.modalContainer}>
+            <View style={styles.modalCardGrande}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                <Text style={styles.modalTitle}>Editar Lançamento</Text>
+                
+                <View style={styles.row}>
+                  <View style={styles.colData}>
+                    <Text style={styles.modalLabel}>Data:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editData} onChangeText={(t) => setEditData(formatarDataInput(t))} maxLength={10} />
+                  </View>
+                  <View style={styles.colData}>
+                    <Text style={styles.modalLabel}>Hora:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editHora} onChangeText={(t) => setEditHora(formatarHoraInput(t))} maxLength={5} />
+                  </View>
+                </View>
 
-                  {!isFalta && !isAtestado && (
-                    <View style={styles.lancamentoDetalhes}>
-                      <Text style={styles.detalheTexto}>📍 Fazenda: {item.fazenda} | Qd: {item.quadra} | Rm: {item.ramal}</Text>
-                      <View style={styles.linhaValores}>
-                        <Text style={styles.detalheQtd}>Qtd: {item.quantidade} pés</Text>
-                        <Text style={styles.detalheValor}>+ R$ {item.valor_total.toFixed(2).replace('.', ',')}</Text>
+                <Text style={styles.modalLabel}>Serviço:</Text>
+                <View style={styles.pickerModalContainer}>
+                  <Picker selectedValue={editServico} onValueChange={setEditServico}>
+                    <Picker.Item label="Falta" value="Falta" />
+                    <Picker.Item label="Atestado" value="Atestado" />
+                    {listaServicos.map(s => <Picker.Item key={s.id} label={s.nome} value={s.nome} />)}
+                  </Picker>
+                </View>
+
+                {editServico === 'Atestado' && (
+                  <>
+                    <Text style={styles.modalLabel}>Dias de Duração:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editDiasAtestado} onChangeText={setEditDiasAtestado} />
+                  </>
+                )}
+
+                {editServico !== 'Falta' && editServico !== 'Atestado' && (
+                  <>
+                    <View style={styles.row}>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Fazenda:</Text>
+                        <View style={styles.pickerModalContainer}>
+                          <Picker selectedValue={editFazenda} onValueChange={setEditFazenda}>
+                            <Picker.Item label="..." value="" />
+                            {fazendasDisponiveis.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
+                          </Picker>
+                        </View>
+                      </View>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Quadra:</Text>
+                        <View style={styles.pickerModalContainer}>
+                          <Picker selectedValue={editQuadra} onValueChange={setEditQuadra}>
+                            <Picker.Item label="..." value="" />
+                            {quadrasDisponiveis.map((q, i) => <Picker.Item key={i} label={q} value={q} />)}
+                          </Picker>
+                        </View>
                       </View>
                     </View>
-                  )}
 
-                  {isAtestado && (
-                    <View style={styles.lancamentoDetalhes}>
-                      <Text style={styles.detalheTexto}>🏥 Data: {item.data_atestado} | Duração: {item.dias_atestado} dias</Text>
-                      <Text style={styles.detalheTexto}>🩺 CID: {item.cid_atestado}</Text>
+                    <View style={styles.row}>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Ramal:</Text>
+                        <TextInput style={styles.modalInput} keyboardType="numeric" value={editRamal} onChangeText={setEditRamal} />
+                      </View>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Quantidade:</Text>
+                        <TextInput style={styles.modalInput} keyboardType="numeric" value={editQuantidade} onChangeText={setEditQuantidade} />
+                      </View>
                     </View>
-                  )}
+                    <Text style={styles.modalAviso}>O total R$ será recalculado com o preço atual do serviço.</Text>
+                  </>
+                )}
 
-                  {/* BARRA DE AÇÕES: EDITAR E EXCLUIR */}
-                  <View style={styles.acoesRow}>
-                    <TouchableOpacity style={styles.btnEditar} onPress={() => abrirEdicao(item)}>
-                      <Text style={styles.btnEditarTexto}>✏️ Editar</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.btnExcluir} onPress={() => confirmarExclusao(item.id, item.servico, item.data || item.created_at)}>
-                      <Text style={styles.btnExcluirTexto}>🗑️ Excluir</Text>
-                    </TouchableOpacity>
-                  </View>
-
+                <View style={styles.modalAcoes}>
+                  <TouchableOpacity style={styles.modalBtnCancelar} onPress={() => setModalEdicaoVisivel(false)}>
+                    <Text style={styles.modalBtnTextoCancelar}>Cancelar</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity style={styles.modalBtnSalvar} onPress={salvarEdicao} disabled={salvandoEdicao}>
+                    {salvandoEdicao ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalBtnTextoSalvar}>Salvar Alterações</Text>}
+                  </TouchableOpacity>
                 </View>
-              );
-            })
-          )}
-        </>
-      )}
-
-      {/* MODAL DE EDIÇÃO */}
-      <Modal visible={modalEdicaoVisivel} transparent={true} animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Editar Lançamento</Text>
-            
-            {itemEditando?.servico === 'Atestado' ? (
-              <>
-                <Text style={styles.modalLabel}>Dias de Duração (Atestado):</Text>
-                <TextInput style={styles.modalInput} keyboardType="numeric" value={editDiasAtestado} onChangeText={setEditDiasAtestado} />
-              </>
-            ) : (
-              <>
-                <Text style={styles.modalLabel}>Quantidade de Pés Produzidos:</Text>
-                <TextInput style={styles.modalInput} keyboardType="numeric" value={editQuantidade} onChangeText={setEditQuantidade} />
-                <Text style={styles.modalAviso}>O valor a receber será recalculado automaticamente com base na nova quantidade.</Text>
-              </>
-            )}
-
-            <View style={styles.modalAcoes}>
-              <TouchableOpacity style={styles.modalBtnCancelar} onPress={() => setModalEdicaoVisivel(false)}>
-                <Text style={styles.modalBtnTextoCancelar}>Cancelar</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.modalBtnSalvar} onPress={salvarEdicao} disabled={salvandoEdicao}>
-                {salvandoEdicao ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalBtnTextoSalvar}>Salvar</Text>}
-              </TouchableOpacity>
+              </ScrollView>
             </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
 
-      <View style={{height: 80}} />
-    </ScrollView>
+        <View style={{height: 80}} />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -406,12 +561,13 @@ const styles = StyleSheet.create({
 
   // ESTILOS DO MODAL
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: '#FFF', padding: 20, borderRadius: 15, elevation: 10 },
+  modalCardGrande: { backgroundColor: '#FFF', padding: 20, borderRadius: 15, elevation: 10, maxHeight: '90%' },
   modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#2C3E50', marginBottom: 15, textAlign: 'center' },
-  modalLabel: { fontSize: 14, fontWeight: 'bold', color: '#34495E', marginBottom: 5 },
-  modalInput: { borderWidth: 1, borderColor: '#D5DBDB', borderRadius: 8, padding: 12, fontSize: 18, backgroundColor: '#F8FAFC', textAlign: 'center', marginBottom: 10 },
-  modalAviso: { fontSize: 11, color: '#E67E22', fontStyle: 'italic', marginBottom: 20, textAlign: 'center' },
-  modalAcoes: { flexDirection: 'row', justifyContent: 'space-between' },
+  modalLabel: { fontSize: 13, fontWeight: 'bold', color: '#34495E', marginBottom: 5, marginTop: 10 },
+  modalInput: { borderWidth: 1, borderColor: '#D5DBDB', borderRadius: 8, padding: 10, fontSize: 16, backgroundColor: '#F8FAFC', textAlign: 'center', height: 45 },
+  pickerModalContainer: { borderWidth: 1, borderColor: '#D5DBDB', borderRadius: 8, backgroundColor: '#F8FAFC', overflow: 'hidden', height: 45, justifyContent: 'center' },
+  modalAviso: { fontSize: 11, color: '#E67E22', fontStyle: 'italic', marginTop: 15, marginBottom: 15, textAlign: 'center' },
+  modalAcoes: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 },
   modalBtnCancelar: { backgroundColor: '#95A5A6', padding: 15, borderRadius: 8, width: '48%', alignItems: 'center' },
   modalBtnTextoCancelar: { color: '#FFF', fontWeight: 'bold' },
   modalBtnSalvar: { backgroundColor: '#27AE60', padding: 15, borderRadius: 8, width: '48%', alignItems: 'center' },

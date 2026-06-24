@@ -1,8 +1,31 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
+
+// 👉 FUNÇÕES INTELIGENTES PARA ALERTAS (FUNCIONAM NA WEB E NO MOBILE)
+const alertaWebMobile = (titulo: string, mensagem: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${titulo}\n\n${mensagem}`);
+  } else {
+    Alert.alert(titulo, mensagem);
+  }
+};
+
+const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () => void) => {
+  if (Platform.OS === 'web') {
+    const confirmado = window.confirm(`${titulo}\n\n${mensagem}`);
+    if (confirmado) {
+      aoConfirmar();
+    }
+  } else {
+    Alert.alert(titulo, mensagem, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sim', style: 'destructive', onPress: aoConfirmar }
+    ]);
+  }
+};
 
 export default function CadastrosScreen() {
   const [abaAtiva, setAbaAtiva] = useState<'colaborador' | 'servico' | 'mapa' | 'setor'>('servico');
@@ -87,9 +110,9 @@ export default function CadastrosScreen() {
   // === SALVAMENTOS ===
   const salvarColaborador = async () => {
     if (!nomeColaborador || !dataAdmissao || !setorColaborador) {
-      return Alert.alert('Erro', 'Preencha o nome, data e setor.');
+      return alertaWebMobile('Erro', 'Preencha o nome, data e setor.');
     }
-    if (dataAdmissao.length !== 10) return Alert.alert('Erro', 'Data incompleta.');
+    if (dataAdmissao.length !== 10) return alertaWebMobile('Erro', 'Data incompleta.');
     
     setSalvando(true);
     const dataFormatada = converterParaBanco(dataAdmissao);
@@ -102,15 +125,15 @@ export default function CadastrosScreen() {
     
     setSalvando(false);
     if (!error) { 
-      Alert.alert('Sucesso', 'Cadastrado!'); 
+      alertaWebMobile('Sucesso', 'Cadastrado com sucesso!'); 
       setNomeColaborador(''); setDataAdmissao(''); setSetorColaborador('');
     } else {
-      Alert.alert('Erro', error.message);
+      alertaWebMobile('Erro', error.message);
     }
   };
 
   const salvarServico = async () => {
-    if (!nomeServico || !precoServico) return Alert.alert('Erro', 'Preencha nome e preço.');
+    if (!nomeServico || !precoServico) return alertaWebMobile('Erro', 'Preencha nome e preço.');
     setSalvando(true);
     
     const precoFormatado = parseFloat(precoServico.replace(',', '.'));
@@ -135,18 +158,18 @@ export default function CadastrosScreen() {
     
     setSalvando(false);
     if (!error) { 
-      Alert.alert('Sucesso', editandoServicoId ? 'Serviço atualizado!' : 'Serviço cadastrado!'); 
+      alertaWebMobile('Sucesso', editandoServicoId ? 'Serviço atualizado!' : 'Serviço cadastrado!'); 
       cancelarEdicaoServico();
       carregarServicos(); 
     } else {
-      Alert.alert('Erro', error.message);
+      alertaWebMobile('Erro', error.message);
     }
   };
 
-  // 👉 NOVO: Função para o Admin bloquear serviços
+  // 👉 Função para o Admin bloquear serviços
   const alternarBloqueioDeServico = async (id: number, bloqueadoAtual: boolean) => {
     if (!isAdmin) {
-      return Alert.alert("Acesso Negado", "Apenas Administradores podem bloquear ou liberar serviços.");
+      return alertaWebMobile("Acesso Negado", "Apenas Administradores podem bloquear ou liberar serviços.");
     }
     
     const novoStatus = !bloqueadoAtual;
@@ -154,14 +177,15 @@ export default function CadastrosScreen() {
 
     const { error } = await supabase.from('servicos').update({ bloqueado: novoStatus }).eq('id', id);
     if (error) {
-      Alert.alert("Erro", "Falha ao mudar o status.");
+      alertaWebMobile("Erro", "Falha ao mudar o status.");
       carregarServicos(); 
     }
   };
 
   const salvarMapa = async () => {
-    if (!nomeFazenda || !numeroQuadra || !numeroRamal || !totalPes || !servicoVinculado) {
-      return Alert.alert('Erro', 'Preencha todos os campos do mapa, incluindo o Serviço!');
+    // 👉 O SERVIÇO VINCULADO NÃO É MAIS OBRIGATÓRIO (Removi a trava)
+    if (!nomeFazenda || !numeroQuadra || !numeroRamal || !totalPes) {
+      return alertaWebMobile('Erro', 'Preencha todos os campos obrigatórios do mapa (Fazenda, Quadra, Ramal e Limite de Pés)!');
     }
     setSalvando(true);
     
@@ -170,7 +194,7 @@ export default function CadastrosScreen() {
       quadra: numeroQuadra, 
       ramal: numeroRamal, 
       total_pes: parseInt(totalPes),
-      servico_permitido: servicoVinculado
+      servico_permitido: servicoVinculado // Vai em branco se não selecionou nada, o que é perfeito
     };
 
     let error;
@@ -185,16 +209,16 @@ export default function CadastrosScreen() {
 
     setSalvando(false);
     
-    if (error) Alert.alert('Erro', error.message);
+    if (error) alertaWebMobile('Erro', error.message);
     else {
-      Alert.alert('Sucesso', editandoMapaId ? 'Ramal atualizado!' : 'Ramal cadastrado!');
+      alertaWebMobile('Sucesso', editandoMapaId ? 'Ramal atualizado!' : 'Ramal cadastrado!');
       cancelarEdicaoMapa();
       carregarMapas();
     }
   };
 
   const salvarSetor = async () => {
-    if (!nomeSetor) return Alert.alert('Erro', 'Digite o nome do setor.');
+    if (!nomeSetor) return alertaWebMobile('Erro', 'Digite o nome do setor.');
     setSalvando(true);
     
     const payload = { nome: nomeSetor };
@@ -211,11 +235,11 @@ export default function CadastrosScreen() {
     setSalvando(false);
     
     if (!error) { 
-      Alert.alert('Sucesso', editandoSetorId ? 'Setor atualizado!' : 'Setor cadastrado!'); 
+      alertaWebMobile('Sucesso', editandoSetorId ? 'Setor atualizado!' : 'Setor cadastrado!'); 
       cancelarEdicaoSetor();
       carregarSetores(); 
     } else {
-      Alert.alert('Erro', error.message);
+      alertaWebMobile('Erro', error.message);
     }
   };
 
@@ -237,7 +261,7 @@ export default function CadastrosScreen() {
     setNumeroQuadra(item.quadra);
     setNumeroRamal(item.ramal);
     setTotalPes(item.total_pes ? item.total_pes.toString() : '');
-    setServicoVinculado(item.servico_permitido);
+    setServicoVinculado(item.servico_permitido || '');
     setEditandoMapaId(item.id);
   };
 
@@ -254,26 +278,26 @@ export default function CadastrosScreen() {
     setNomeSetor(''); setEditandoSetorId(null);
   };
 
-  // === FUNÇÕES DE EXCLUSÃO ===
+  // === FUNÇÕES DE EXCLUSÃO COM CONFIRMAÇÃO WEB/MOBILE ===
   const excluirSetor = (id: number, nome: string) => {
-    Alert.alert('Excluir Setor', `Apagar o setor "${nome}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sim', onPress: async () => { await supabase.from('setores').delete().eq('id', id); carregarSetores(); } }
-    ]);
+    confirmacaoWebMobile('Excluir Setor', `Apagar o setor "${nome}"?`, async () => {
+      await supabase.from('setores').delete().eq('id', id); 
+      carregarSetores();
+    });
   };
 
   const excluirServico = (id: number, nome: string) => {
-    Alert.alert('Excluir Serviço', `Apagar o serviço "${nome}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sim', onPress: async () => { await supabase.from('servicos').delete().eq('id', id); carregarServicos(); } }
-    ]);
+    confirmacaoWebMobile('Excluir Serviço', `Apagar o serviço "${nome}"?`, async () => {
+      await supabase.from('servicos').delete().eq('id', id); 
+      carregarServicos();
+    });
   };
 
   const excluirMapa = (id: number, fazenda: string, ramal: string) => {
-    Alert.alert('Excluir Ramal', `Apagar o Ramal ${ramal} da Fazenda ${fazenda}?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sim', onPress: async () => { await supabase.from('mapa_fazendas').delete().eq('id', id); carregarMapas(); } }
-    ]);
+    confirmacaoWebMobile('Excluir Ramal', `Apagar o Ramal ${ramal} da Fazenda ${fazenda}?`, async () => {
+      await supabase.from('mapa_fazendas').delete().eq('id', id); 
+      carregarMapas();
+    });
   };
 
   return (
@@ -441,10 +465,11 @@ export default function CadastrosScreen() {
           <Text style={styles.label}>Limite de Pés do Ramal:</Text>
           <TextInput style={styles.input} placeholder="Ex: 1500" keyboardType="numeric" value={totalPes} onChangeText={setTotalPes}/>
 
-          <Text style={styles.label}>Serviço Padrão deste Ramal:</Text>
+          {/* 👉 AGORA É OPCIONAL */}
+          <Text style={styles.label}>Serviço Padrão deste Ramal (Opcional):</Text>
           <View style={styles.pickerContainer}>
             <Picker selectedValue={servicoVinculado} onValueChange={setServicoVinculado} style={styles.picker}>
-              <Picker.Item label="Selecione o serviço..." value="" />
+              <Picker.Item label="Nenhum (Livre)" value="" />
               {listaServicos.map((item) => (<Picker.Item key={item.id} label={item.nome} value={item.nome} />))}
             </Picker>
           </View>
@@ -471,7 +496,7 @@ export default function CadastrosScreen() {
                 <View style={{flex: 1}}>
                   <Text style={styles.itemNome}>Fz: {item.fazenda} | Q: {item.quadra} | R: {item.ramal}</Text>
                   <Text style={styles.itemDetalhe}>Capacidade: {item.total_pes} pés</Text>
-                  <Text style={styles.itemDetalhe}>Serviço Autorizado: {item.servico_permitido}</Text>
+                  <Text style={styles.itemDetalhe}>Serviço Autorizado: {item.servico_permitido || 'Livre'}</Text>
                 </View>
                 <View style={{flexDirection: 'row', gap: 15}}>
                   <TouchableOpacity onPress={() => iniciarEdicaoMapa(item)}><Text style={styles.iconeAcao}>✏️</Text></TouchableOpacity>

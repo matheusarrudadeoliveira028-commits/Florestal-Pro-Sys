@@ -60,13 +60,14 @@ export default function HomeScreen() {
 
   // Controle de Horário Permitido
   const [horaInicioPermitida, setHoraInicioPermitida] = useState('06:00');
-  const [horaFimPermitida, setHoraFimPermitida] = useState('18:00');
+  const [horaFimPermitida, setHoraFimPermitida] = useState('23:00');
 
-  // ESTADOS DOS MODAIS
+  // ESTADOS DOS MODAIS E EDIÇÃO
   const [modalEquipeVisivel, setModalEquipeVisivel] = useState(false);
   const [modalPendentesVisivel, setModalPendentesVisivel] = useState(false);
+  const [indexEdicao, setIndexEdicao] = useState<number | null>(null);
+  const [dataOriginalEdicao, setDataOriginalEdicao] = useState<string | null>(null);
 
-  // 👉 Correção 1: useFocusEffect faz a tela atualizar os dados toda vez que você clica na aba
   useFocusEffect(
     useCallback(() => {
       carregarUsuarioLogado(); 
@@ -172,18 +173,23 @@ export default function HomeScreen() {
   const atualizarMochilaManual = () => { carregarUsuarioLogado(); Alert.alert("Atualizando", "Buscando dados..."); };
 
   useEffect(() => {
-    setQuadra(''); setRamal(''); setLimitePes(null);
+    // Só zera quadra e ramal se não estivermos no meio de uma edição
+    if (indexEdicao === null) {
+      setQuadra(''); setRamal(''); setLimitePes(null);
+    }
     if (fazenda) setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))] as string[]);
     else setQuadrasDisponiveis([]);
-  }, [fazenda]);
+  }, [fazenda, mapaCompleto]);
 
   useEffect(() => {
-    setRamal(''); setLimitePes(null);
+    // Só zera ramal se não estivermos no meio de uma edição
+    if (indexEdicao === null) {
+      setRamal(''); setLimitePes(null);
+    }
     if (quadra) setRamaisDisponiveis(mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra));
     else setRamaisDisponiveis([]);
-  }, [quadra]);
+  }, [quadra, fazenda, mapaCompleto]);
 
-  // Efeito para verificar o limite do Ramal individual
   useEffect(() => {
     const numRamal = ramal.trim();
     if (numRamal) {
@@ -207,15 +213,40 @@ export default function HomeScreen() {
     } else setValorTotalCalculado(0);
   }, [servicoSelecionadoCompleto, quantidade]);
 
-  // Lógica de Alerta Cego (sem revelar a quantidade)
   const handleMudancaQuantidade = (texto: string) => {
     const valorDigitado = parseInt(texto) || 0;
     if (limitePes !== null && valorDigitado > limitePes) {
       Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
-      setQuantidade(''); // Apaga o número digitado para ele não descobrir qual é o limite
+      setQuantidade(''); 
     } else {
       setQuantidade(texto);
     }
+  };
+
+  // 👉 Função para PUXAR os dados do lançamento para o formulário
+  const prepararEdicao = (index: number) => {
+    const item = lancamentosPendentes[index];
+    setColaborador(item.colaborador);
+    setFazenda(item.fazenda);
+    setQuadra(item.quadra);
+    setServico(item.servico);
+    setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === item.servico) || null);
+    setRamal(String(item.ramal));
+    setQuantidade(String(item.quantidade));
+    setIndexEdicao(index);
+    setDataOriginalEdicao(item.data); // Guarda a data original para não alterar a ordem do lote
+    setModalPendentesVisivel(false);
+  };
+
+  // 👉 Função para LIMPAR o modo de edição
+  const cancelarEdicao = () => {
+    setIndexEdicao(null);
+    setDataOriginalEdicao(null);
+    setServico('');
+    setServicoSelecionadoCompleto(null);
+    setRamal('');
+    setQuantidade('');
+    setValorTotalCalculado(0);
   };
 
   const salvarLancamento = async () => {
@@ -225,7 +256,6 @@ export default function HomeScreen() {
     
     const dataMomento = new Date();
     
-    // 👉 Correção 2: Verificação Matemática Blindada (Não falha em modo Offline nem com Strings curtas)
     const horaAtualMinutos = dataMomento.getHours() * 60 + dataMomento.getMinutes();
     
     const [horaIniStr, minIniStr] = horaInicioPermitida.split(':');
@@ -240,16 +270,10 @@ export default function HomeScreen() {
 
     const numRamal = ramal.trim();
     
-    // Trava contra ramal fantasma
-    const ramalInfo = ramaisDisponiveis.find(r => String(r.ramal) === numRamal);
+    // Busca no mapa completo para evitar falso-positivo durante atualização de estados na edição
+    const ramalInfo = mapaCompleto.find(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === numRamal);
     if (!ramalInfo) {
       return Alert.alert("❌ Ramal Inválido", "Este ramal não está cadastrado nesta fazenda e quadra!");
-    }
-
-    const isServicoAtualCoringa = servicoSelecionadoCompleto?.is_coringa === true;
-
-    if (ramalInfo.servico_permitido && servico !== ramalInfo.servico_permitido && !isServicoAtualCoringa) { 
-      return Alert.alert("❌ Bloqueado", `O ramal ${numRamal} só aceita: ${ramalInfo.servico_permitido}.`); 
     }
     
     if (ramalInfo.data_bloqueio) {
@@ -259,7 +283,6 @@ export default function HomeScreen() {
       }
     }
 
-    // Trava de segurança final para o limite cego
     if (limitePes !== null && parseInt(quantidade) > limitePes) {
         setQuantidade('');
         return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
@@ -279,11 +302,19 @@ export default function HomeScreen() {
         quantidade: parseInt(quantidade), 
         valor_unitario: valorUnitario, 
         valor_total: valorTotalCalculado, 
-        data: dataMomento.toISOString(),
+        data: dataOriginalEdicao ? dataOriginalEdicao : dataMomento.toISOString(), // Mantém a data original se for edição
         fiscal_nome: perfilLogado?.nome || 'Fiscal Não Identificado' 
       };
 
-      const novaLista = [...lancamentosPendentes, novoLancamento];
+      let novaLista = [...lancamentosPendentes];
+      
+      // Se estiver no modo edição, substitui. Se não, adiciona na lista.
+      if (indexEdicao !== null) {
+        novaLista[indexEdicao] = novoLancamento;
+      } else {
+        novaLista.push(novoLancamento);
+      }
+
       await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
       setLancamentosPendentes(novaLista);
 
@@ -293,6 +324,8 @@ export default function HomeScreen() {
       setRamal(''); 
       setQuantidade(''); 
       setValorTotalCalculado(0);
+      setIndexEdicao(null);
+      setDataOriginalEdicao(null);
 
     } catch (e) {
       Alert.alert("Erro", "Não foi possível salvar no celular.");
@@ -327,13 +360,27 @@ export default function HomeScreen() {
   };
 
   const excluirLancamentoPendente = async (index: number) => {
-    const novaLista = [...lancamentosPendentes];
-    novaLista.splice(index, 1);
-    await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
-    setLancamentosPendentes(novaLista);
+    Alert.alert(
+      "Excluir Lançamento",
+      "Tem certeza que deseja apagar este registro?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Apagar", 
+          style: "destructive",
+          onPress: async () => {
+            const novaLista = [...lancamentosPendentes];
+            novaLista.splice(index, 1);
+            await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
+            setLancamentosPendentes(novaLista);
+            // Se o usuário apagar o item que estava editando, limpa a edição
+            if (indexEdicao === index) cancelarEdicao();
+          }
+        }
+      ]
+    );
   };
 
-  // Filtro visual para o Lote atual do Colaborador selecionado
   const loteAtualColaborador = lancamentosPendentes.filter(l => l.colaborador === colaborador);
 
   return (
@@ -367,8 +414,8 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.header}>
-            <Text style={styles.title}>Brekaz Produção</Text>
-            <Text style={styles.subtitle}>Lançamento Rápido em Lotes</Text>
+            <Text style={styles.title}>Fazenda Acauã</Text>
+            <Text style={styles.subtitle}>Lançamento de Produção</Text>
             <Relogio onAtualizar={atualizarMochilaManual} />
           </View>
 
@@ -377,20 +424,26 @@ export default function HomeScreen() {
               <Text style={styles.syncTexto}>📦 {lancamentosPendentes.length} no total aguardando envio</Text>
               <View style={styles.syncBotoesRow}>
                 <TouchableOpacity style={styles.btnSyncVer} onPress={() => setModalPendentesVisivel(true)}>
-                  <Text style={styles.btnSyncVerTexto}>✏️ VER TODOS</Text>
+                  <Text style={styles.btnSyncVerTexto}>✏️ VER / EDITAR</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando}>
-                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={styles.btnSyncTexto}>🚀 ENVIAR TUDO</Text>}
+                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando || indexEdicao !== null}>
+                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={[styles.btnSyncTexto, indexEdicao !== null && {color: '#95A5A6'}]}>🚀 ENVIAR TUDO</Text>}
                 </TouchableOpacity>
               </View>
             </View>
           )}
 
-          <View style={styles.card}>
+          <View style={[styles.card, indexEdicao !== null && { borderColor: '#F1C40F', borderWidth: 2 }]}>
             {carregandoDados ? (
               <ActivityIndicator size="large" color="#27AE60" />
             ) : (
               <>
+                {indexEdicao !== null && (
+                  <View style={styles.edicaoAviso}>
+                    <Text style={styles.edicaoAvisoTexto}>⚠️ MODO DE EDIÇÃO ATIVADO</Text>
+                  </View>
+                )}
+
                 <Text style={styles.label}>Colaborador:</Text>
                 <View style={styles.pickerContainer}>
                   <Picker selectedValue={colaborador} onValueChange={setColaborador} style={styles.picker}>
@@ -461,12 +514,23 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
-                  {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>➕ ADICIONAR AO LOTE</Text>}
-                </TouchableOpacity>
+                {indexEdicao !== null ? (
+                  <View style={styles.rowBotoesEdicao}>
+                    <TouchableOpacity style={[styles.button, styles.btnCancelarEdicao]} onPress={cancelarEdicao}>
+                      <Text style={styles.buttonText}>❌ CANCELAR</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.button, styles.btnSalvarEdicao, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
+                      {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>💾 SALVAR</Text>}
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarLancamento} disabled={salvando}>
+                    {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>➕ ADICIONAR AO LOTE</Text>}
+                  </TouchableOpacity>
+                )}
 
                 {/* SESSÃO DO LOTE ATUAL */}
-                {colaborador !== '' && loteAtualColaborador.length > 0 && (
+                {colaborador !== '' && loteAtualColaborador.length > 0 && indexEdicao === null && (
                   <View style={styles.loteContainer}>
                     <Text style={styles.loteTitulo}>📝 Lote de {colaborador}:</Text>
                     {loteAtualColaborador.map((lote, index) => (
@@ -530,6 +594,9 @@ export default function HomeScreen() {
                         <Text style={styles.itemDetalhes}>{item.servico} | Qtd: {item.quantidade} | R$ {item.valor_total.toFixed(2)}</Text>
                       </View>
                       <View style={styles.itemAcoes}>
+                        <TouchableOpacity style={styles.btnEditarPendente} onPress={() => prepararEdicao(index)}>
+                          <Text style={styles.btnAcaoTexto}>✏️</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity style={styles.btnApagarPendente} onPress={() => excluirLancamentoPendente(index)}>
                           <Text style={styles.btnAcaoTexto}>🗑️</Text>
                         </TouchableOpacity>
@@ -587,6 +654,12 @@ const styles = StyleSheet.create({
   buttonDisabled: { backgroundColor: '#95A5A6' },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   
+  edicaoAviso: { backgroundColor: '#FCF3CF', padding: 10, borderRadius: 8, marginBottom: 15, alignItems: 'center' },
+  edicaoAvisoTexto: { color: '#D35400', fontWeight: 'bold', fontSize: 12 },
+  rowBotoesEdicao: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
+  btnCancelarEdicao: { flex: 1, marginRight: 10, backgroundColor: '#E74C3C', marginTop: 0 },
+  btnSalvarEdicao: { flex: 1, backgroundColor: '#27AE60', marginTop: 0 },
+
   /* ESTILOS DO LOTE (CARRINHO RICA) */
   loteContainer: { marginTop: 25, backgroundColor: '#F9EBEA', padding: 15, borderRadius: 10, borderLeftWidth: 4, borderLeftColor: '#E74C3C' },
   loteTitulo: { fontSize: 15, fontWeight: 'bold', color: '#C0392B', marginBottom: 10 },
@@ -607,6 +680,7 @@ const styles = StyleSheet.create({
   itemColab: { fontSize: 16, fontWeight: 'bold', color: '#2C3E50' },
   itemDetalhes: { fontSize: 13, color: '#7F8C8D', marginTop: 2 },
   itemAcoes: { flexDirection: 'row', gap: 10 },
+  btnEditarPendente: { backgroundColor: '#F1C40F', padding: 10, borderRadius: 8 },
   btnApagarPendente: { backgroundColor: '#E74C3C', padding: 10, borderRadius: 8 },
   btnAcaoTexto: { fontSize: 16 },
   btnFecharModal: { backgroundColor: '#95A5A6', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 15 },

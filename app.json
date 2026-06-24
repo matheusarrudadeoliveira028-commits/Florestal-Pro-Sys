@@ -1,20 +1,20 @@
 {
   "expo": {
-    "name": "Brekaz Produção",
-    "slug": "brekaz-producao",
+    "name": "Production System",
+    "slug": "production-system",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "brekazproducao",
+    "scheme": "productionsystem",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "br.com.brekaz.producao",
       "infoPlist": {
-        "NSCameraUsageDescription": "O Brekaz Produção precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
-        "NSLocationWhenInUseUsageDescription": "O Brekaz Produção utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
-        "NSPhotoLibraryUsageDescription": "O Brekaz Produção precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
+        "NSCameraUsageDescription": "O Production System precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
+        "NSLocationWhenInUseUsageDescription": "O Production System utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
+        "NSPhotoLibraryUsageDescription": "O Production System precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
       }
     },
     "android": {
@@ -45,13 +45,13 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "O Brekaz Produção precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
+          "cameraPermission": "O Production System precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
         }
       ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "O Brekaz Produção precisa da sua localização para registrar as coordenadas exatas da produção no campo."
+          "locationAlwaysAndWhenInUsePermission": "O Production System precisa da sua localização para registrar as coordenadas exatas da produção no campo."
         }
       ],
       [
@@ -66,7 +66,8 @@
           }
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -5,12 +5,17 @@ import { supabase } from '../../src/supabase';
 
 export default function AusenciasScreen() {
   const [colaborador, setColaborador] = useState('');
-  const [tipoAusencia, setTipoAusencia] = useState('Falta');
   
-  // NOVOS ESTADOS PARA O ATESTADO
+  // 👉 Iniciando agora em 'Atestado' pois a falta foi removida
+  const [tipoAusencia, setTipoAusencia] = useState('Atestado'); 
+  
+  // ESTADOS PARA O ATESTADO
   const [dataAtestado, setDataAtestado] = useState('');
   const [diasAtestado, setDiasAtestado] = useState('');
   const [cidAtestado, setCidAtestado] = useState('');
+  
+  // 👉 NOVO ESTADO PARA O ABONAMENTO
+  const [motivoAbono, setMotivoAbono] = useState('');
   
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
   const [salvando, setSalvando] = useState(false);
@@ -35,7 +40,7 @@ export default function AusenciasScreen() {
 
   const salvarAusencia = async () => {
     if (!colaborador || !tipoAusencia) {
-      return Alert.alert("Aviso", "Selecione o colaborador e o tipo de ausência!");
+      return Alert.alert("Aviso", "Selecione o colaborador e o tipo de ocorrência!");
     }
 
     // Trava de segurança para atestados
@@ -45,12 +50,21 @@ export default function AusenciasScreen() {
       }
     }
 
+    // 👉 Trava de segurança para o Abonamento
+    if (tipoAusencia === 'Abonado') {
+      if (!motivoAbono.trim()) {
+        return Alert.alert("Aviso", "Por favor, digite o motivo do abonamento pela empresa!");
+      }
+    }
+
     setSalvando(true);
 
-    // O Segredo: Enviamos os campos de localização vazios e o dinheiro zerado!
+    // Concatena o motivo junto com a palavra Abonado para aparecer direto no PDF e no Fechamento
+    const servicoFinal = tipoAusencia === 'Abonado' ? `Abonado (${motivoAbono})` : tipoAusencia;
+
     const { error } = await supabase.from('diarios_campo').insert([{ 
       colaborador: colaborador, 
-      servico: tipoAusencia, // Vai gravar "Falta" ou "Atestado"
+      servico: servicoFinal, // Grava "Atestado" ou "Abonado (Motivo)"
       fazenda: '-', 
       quadra: '-', 
       ramal: '-', 
@@ -68,12 +82,13 @@ export default function AusenciasScreen() {
     if (error) {
       Alert.alert("Erro ao salvar", error.message);
     } else {
-      Alert.alert("✅ Sucesso!", `${tipoAusencia} registrada para ${colaborador} com sucesso!`);
-      // Limpa para o próximo lançamento
+      Alert.alert("✅ Sucesso!", `Lançamento registrado para ${colaborador} com sucesso!`);
+      // Limpa os campos para o próximo lançamento
       setColaborador('');
       setDataAtestado('');
       setDiasAtestado('');
       setCidAtestado('');
+      setMotivoAbono('');
     }
   };
 
@@ -81,13 +96,13 @@ export default function AusenciasScreen() {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Controle de Ponto 📅</Text>
-        <Text style={styles.subtitle}>Lançamento de Faltas e Atestados</Text>
+        <Text style={styles.subtitle}>Lançamento de Atestados e Abonos</Text>
       </View>
 
       <View style={styles.card}>
         {carregandoDados ? (
           <View style={{alignItems: 'center', marginVertical: 20}}>
-            <ActivityIndicator size="large" color="#E74C3C" />
+            <ActivityIndicator size="large" color="#3498DB" />
             <Text style={{marginTop: 10, color: '#7F8C8D'}}>Carregando equipe...</Text>
           </View>
         ) : (
@@ -95,7 +110,7 @@ export default function AusenciasScreen() {
             <Text style={styles.label}>Colaborador:</Text>
             <View style={styles.pickerContainer}>
               <Picker selectedValue={colaborador} onValueChange={setColaborador} style={styles.picker}>
-                <Picker.Item label="Selecione quem faltou..." value="" />
+                <Picker.Item label="Selecione quem ausentou..." value="" />
                 {listaColaboradores.map((item) => (
                   <Picker.Item key={item.id} label={item.nome} value={item.nome} />
                 ))}
@@ -105,9 +120,9 @@ export default function AusenciasScreen() {
             <Text style={styles.label}>Tipo de Ocorrência:</Text>
             <View style={styles.pickerContainer}>
               <Picker selectedValue={tipoAusencia} onValueChange={setTipoAusencia} style={styles.picker}>
-                <Picker.Item label="Falta Injustificada" value="Falta" />
+                {/* A FALTA FOI REMOVIDA DAQUI CONFORME SOLICITADO */}
                 <Picker.Item label="Atestado Médico" value="Atestado" />
-                <Picker.Item label="Aviso Prévio / Folga" value="Folga" />
+                <Picker.Item label="Abonado pela Empresa" value="Abonado" />
               </Picker>
             </View>
 
@@ -148,17 +163,32 @@ export default function AusenciasScreen() {
               </View>
             )}
 
+            {/* 👉 SEÇÃO DINÂMICA: SÓ APARECE SE FOR ABONADO PELA EMPRESA */}
+            {tipoAusencia === 'Abonado' && (
+              <View style={styles.abonoBox}>
+                <Text style={styles.abonoTitulo}>Detalhes do Abonamento ✅</Text>
+                
+                <Text style={styles.label}>Motivo do Abono:</Text>
+                <TextInput 
+                  style={styles.input} 
+                  placeholder="Ex: Doação de sangue, Casamento, Problema particular..." 
+                  value={motivoAbono} 
+                  onChangeText={setMotivoAbono} 
+                />
+              </View>
+            )}
+
             {/* CAIXA DE AVISO VISUAL */}
-            <View style={[styles.avisoBox, tipoAusencia === 'Falta' ? styles.avisoFalta : styles.avisoAtestado]}>
+            <View style={[styles.avisoBox, tipoAusencia === 'Abonado' ? styles.avisoAbono : styles.avisoAtestado]}>
               <Text style={styles.avisoTexto}>
-                {tipoAusencia === 'Falta' 
-                  ? "⚠️ O colaborador não receberá valor por este dia (R$ 0,00)." 
-                  : "ℹ️ Ausência justificada. O valor lançado será R$ 0,00."}
+                {tipoAusencia === 'Abonado' 
+                  ? "✅ Falta justificada/abonada pela empresa. O valor lançado será R$ 0,00." 
+                  : "ℹ️ Ausência justificada (Saúde). O valor lançado será R$ 0,00."}
               </Text>
             </View>
 
             <TouchableOpacity 
-              style={[styles.button, salvando ? styles.buttonDisabled : null, tipoAusencia === 'Falta' ? styles.btnFalta : styles.btnAtestado]} 
+              style={[styles.button, salvando ? styles.buttonDisabled : null, tipoAusencia === 'Abonado' ? styles.btnAbono : styles.btnAtestado]} 
               onPress={salvarAusencia} 
               disabled={salvando}
             >
@@ -190,22 +220,25 @@ const styles = StyleSheet.create({
   pickerContainer: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, backgroundColor: '#F8FAFC', overflow: 'hidden' },
   picker: { height: 50, width: '100%', borderWidth: 0, backgroundColor: 'transparent' },
   
-  // NOVOS ESTILOS PARA INPUTS
   input: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 16, backgroundColor: '#F8FAFC', color: '#2C3E50', height: 50 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   col: { width: '48%' },
   
-  // CAIXA DE DESTAQUE DO ATESTADO
+  // ESTILOS DO ATESTADO
   atestadoBox: { backgroundColor: '#EBF5FB', padding: 15, borderRadius: 10, marginTop: 15, borderWidth: 1, borderColor: '#AED6F1' },
   atestadoTitulo: { fontSize: 16, fontWeight: 'bold', color: '#2980B9', marginBottom: 5, textAlign: 'center' },
 
+  // ESTILOS DO ABONAMENTO
+  abonoBox: { backgroundColor: '#EAEDED', padding: 15, borderRadius: 10, marginTop: 15, borderWidth: 1, borderColor: '#BDC3C7' },
+  abonoTitulo: { fontSize: 16, fontWeight: 'bold', color: '#34495E', marginBottom: 5, textAlign: 'center' },
+
   avisoBox: { padding: 15, borderRadius: 8, marginTop: 20, borderWidth: 1 },
-  avisoFalta: { backgroundColor: '#FDEDEC', borderColor: '#E74C3C' },
-  avisoAtestado: { backgroundColor: '#E8F8F5', borderColor: '#27AE60' }, // Mudei a cor do aviso do atestado para verde
+  avisoAbono: { backgroundColor: '#EAEDED', borderColor: '#7F8C8D' },
+  avisoAtestado: { backgroundColor: '#E8F8F5', borderColor: '#27AE60' },
   avisoTexto: { color: '#2C3E50', fontSize: 14, textAlign: 'center', fontWeight: '500' },
 
   button: { padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 25 },
-  btnFalta: { backgroundColor: '#E74C3C' },
+  btnAbono: { backgroundColor: '#34495E' },
   btnAtestado: { backgroundColor: '#3498DB' },
   buttonDisabled: { backgroundColor: '#95A5A6' },
   buttonText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },

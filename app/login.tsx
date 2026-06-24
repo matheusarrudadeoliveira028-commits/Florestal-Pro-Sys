@@ -118,7 +118,7 @@ export default function LoginScreen() {
             style={styles.logoImage} 
             resizeMode="contain" 
           />
-          <Text style={styles.subText}>Sistema de Gestão Resinagem!</Text>
+          <Text style={styles.subText}>Sejam bem-vindos!</Text>
         </View>
 
         <View style={styles.card}>
@@ -189,8 +189,8 @@ const styles = StyleSheet.create({
   container: { flexGrow: 1, backgroundColor: '#ffffff', justifyContent: 'center', padding: 20, paddingBottom: 40 },
   logoBox: { alignItems: 'center', marginBottom: 35 },
   logoImage: { 
-    width: 400,  
-    height: 300, 
+    width: 700,  
+    height: 400, 
     marginBottom: 10 
   },
   subText: { fontSize: 25, color: '#000000', marginTop: 5, fontWeight: '500' },
