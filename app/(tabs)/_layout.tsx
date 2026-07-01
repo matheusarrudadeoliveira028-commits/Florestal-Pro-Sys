@@ -2,11 +2,15 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Drawer } from 'expo-router/drawer';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, View } from 'react-native';
+import { ActivityIndicator, Alert, View, useWindowDimensions } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '../../src/supabase';
 
 export default function DrawerLayout() {
+  // 👉 NOVO: Pega a largura da tela para a inteligência de responsividade
+  const { width } = useWindowDimensions();
+  const isTelaGrande = width >= 768;
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [permissoesAtivas, setPermissoesAtivas] = useState<any>({});
   const [carregandoMenu, setCarregandoMenu] = useState(true);
@@ -79,6 +83,11 @@ export default function DrawerLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Drawer
         screenOptions={{
+          // 👉 NOVA REGRA: Fixo na Web (permanent), esconde no celular (front)
+          drawerType: isTelaGrande ? 'permanent' : 'front',
+          drawerStyle: {
+            width: isTelaGrande ? 280 : 250,
+          },
           headerStyle: { backgroundColor: '#2C3E50' },
           headerTintColor: '#FFF',
           headerTitleStyle: { fontWeight: 'bold' },

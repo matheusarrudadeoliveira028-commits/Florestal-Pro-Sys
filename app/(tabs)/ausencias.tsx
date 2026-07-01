@@ -5,8 +5,6 @@ import { supabase } from '../../src/supabase';
 
 export default function AusenciasScreen() {
   const [colaborador, setColaborador] = useState('');
-  
-  // 👉 Iniciando agora em 'Atestado' pois a falta foi removida
   const [tipoAusencia, setTipoAusencia] = useState('Atestado'); 
   
   // ESTADOS PARA O ATESTADO
@@ -14,7 +12,8 @@ export default function AusenciasScreen() {
   const [diasAtestado, setDiasAtestado] = useState('');
   const [cidAtestado, setCidAtestado] = useState('');
   
-  // 👉 NOVO ESTADO PARA O ABONAMENTO
+  // 👉 ESTADOS PARA O ABONAMENTO (Agora com Data!)
+  const [dataAbono, setDataAbono] = useState('');
   const [motivoAbono, setMotivoAbono] = useState('');
   
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
@@ -38,23 +37,46 @@ export default function AusenciasScreen() {
     setCarregandoDados(false);
   };
 
+  // === MÁSCARA AUTOMÁTICA (Coloca as barras sozinho) ===
+  const aplicarMascaraData = (texto: string) => {
+    let v = texto.replace(/\D/g, ''); 
+    if (v.length > 8) v = v.substring(0, 8); 
+    if (v.length > 4) v = v.replace(/^(\d{2})(\d{2})(\d{1,4}).*/, '$1/$2/$3');
+    else if (v.length > 2) v = v.replace(/^(\d{2})(\d{1,2}).*/, '$1/$2');
+    return v;
+  };
+
+  // === CONVERSOR PARA O BANCO (DD/MM/AAAA -> AAAA-MM-DD) ===
+  const converterParaBanco = (dataBR: string) => {
+    const partes = dataBR.split('/');
+    if (partes.length === 3) return `${partes[2]}-${partes[1]}-${partes[0]}`;
+    return null;
+  };
+
   const salvarAusencia = async () => {
     if (!colaborador || !tipoAusencia) {
       return Alert.alert("Aviso", "Selecione o colaborador e o tipo de ocorrência!");
     }
 
+    let dataLancamentoBD = null;
+
     // Trava de segurança para atestados
     if (tipoAusencia === 'Atestado') {
-      if (!dataAtestado || !diasAtestado || !cidAtestado) {
-        return Alert.alert("Aviso", "Preencha a data, os dias e a CID do atestado médico!");
+      if (!dataAtestado || dataAtestado.length !== 10 || !diasAtestado || !cidAtestado) {
+        return Alert.alert("Aviso", "Preencha a data (completa), os dias e a CID do atestado médico!");
       }
+      dataLancamentoBD = converterParaBanco(dataAtestado);
     }
 
     // 👉 Trava de segurança para o Abonamento
     if (tipoAusencia === 'Abonado') {
+      if (!dataAbono || dataAbono.length !== 10) {
+        return Alert.alert("Aviso", "Preencha a data do abono corretamente (DD/MM/AAAA)!");
+      }
       if (!motivoAbono.trim()) {
         return Alert.alert("Aviso", "Por favor, digite o motivo do abonamento pela empresa!");
       }
+      dataLancamentoBD = converterParaBanco(dataAbono);
     }
 
     setSalvando(true);
@@ -62,7 +84,7 @@ export default function AusenciasScreen() {
     // Concatena o motivo junto com a palavra Abonado para aparecer direto no PDF e no Fechamento
     const servicoFinal = tipoAusencia === 'Abonado' ? `Abonado (${motivoAbono})` : tipoAusencia;
 
-    const { error } = await supabase.from('diarios_campo').insert([{ 
+    const payload: any = { 
       colaborador: colaborador, 
       servico: servicoFinal, // Grava "Atestado" ou "Abonado (Motivo)"
       fazenda: '-', 
@@ -72,10 +94,17 @@ export default function AusenciasScreen() {
       valor_unitario: 0,
       valor_total: 0,
       // Salva os dados do atestado (Se não for atestado, manda vazio/nulo)
-      data_atestado: tipoAusencia === 'Atestado' ? dataAtestado : null,
+      data_atestado: tipoAusencia === 'Atestado' ? dataLancamentoBD : null,
       dias_atestado: tipoAusencia === 'Atestado' ? parseInt(diasAtestado) : null,
       cid_atestado: tipoAusencia === 'Atestado' ? cidAtestado : null
-    }]);
+    };
+
+    // Força a data do diário para ser exatamente o dia selecionado (e não o dia do cadastro)
+    if (dataLancamentoBD) {
+      payload.data = dataLancamentoBD;
+    }
+
+    const { error } = await supabase.from('diarios_campo').insert([payload]);
 
     setSalvando(false);
 
@@ -88,12 +117,13 @@ export default function AusenciasScreen() {
       setDataAtestado('');
       setDiasAtestado('');
       setCidAtestado('');
+      setDataAbono('');
       setMotivoAbono('');
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
         <Text style={styles.title}>Controle de Ponto 📅</Text>
         <Text style={styles.subtitle}>Lançamento de Atestados e Abonos</Text>
@@ -120,7 +150,6 @@ export default function AusenciasScreen() {
             <Text style={styles.label}>Tipo de Ocorrência:</Text>
             <View style={styles.pickerContainer}>
               <Picker selectedValue={tipoAusencia} onValueChange={setTipoAusencia} style={styles.picker}>
-                {/* A FALTA FOI REMOVIDA DAQUI CONFORME SOLICITADO */}
                 <Picker.Item label="Atestado Médico" value="Atestado" />
                 <Picker.Item label="Abonado pela Empresa" value="Abonado" />
               </Picker>
@@ -134,9 +163,11 @@ export default function AusenciasScreen() {
                 <Text style={styles.label}>Data do Atestado:</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="Ex: 15/04/2026" 
+                  placeholder="DD/MM/AAAA" 
+                  keyboardType="numeric"
+                  maxLength={10}
                   value={dataAtestado} 
-                  onChangeText={setDataAtestado} 
+                  onChangeText={(t) => setDataAtestado(aplicarMascaraData(t))} 
                 />
 
                 <View style={styles.row}>
@@ -157,6 +188,7 @@ export default function AusenciasScreen() {
                       placeholder="Ex: J01.9" 
                       value={cidAtestado} 
                       onChangeText={setCidAtestado} 
+                      autoCapitalize="characters"
                     />
                   </View>
                 </View>
@@ -168,10 +200,20 @@ export default function AusenciasScreen() {
               <View style={styles.abonoBox}>
                 <Text style={styles.abonoTitulo}>Detalhes do Abonamento ✅</Text>
                 
+                <Text style={styles.label}>Data da Ausência:</Text>
+                <TextInput 
+                  style={styles.input} 
+                  placeholder="DD/MM/AAAA" 
+                  keyboardType="numeric"
+                  maxLength={10}
+                  value={dataAbono} 
+                  onChangeText={(t) => setDataAbono(aplicarMascaraData(t))} 
+                />
+
                 <Text style={styles.label}>Motivo do Abono:</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="Ex: Doação de sangue, Casamento, Problema particular..." 
+                  placeholder="Ex: Doação de sangue, Casamento..." 
                   value={motivoAbono} 
                   onChangeText={setMotivoAbono} 
                 />
