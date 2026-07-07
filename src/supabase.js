@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
-const supabaseUrl = 'https://jtviywfdrtgmxxshqbpg.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp0dml5d2ZkcnRnbXh4c2hxYnBnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzUwODUwNiwiZXhwIjoyMDkzMDg0NTA2fQ.J_DDuvXcYePC_WObV81koX6MTu4GGmrEjPXui61rjSI';
+const supabaseUrl = 'https://ztikjwmhdjbbcthodjak.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0aWtqd21oZGpiYmN0aG9kamFrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzAwMDEyNCwiZXhwIjoyMDk4NTc2MTI0fQ.RiDRPCL_tAk_ZLlS0k8-Rodasq9dmDH9Fyv_Wp2LUzM';
 
 // Configuração inteligente para não quebrar na Web
 const supabaseOptions = {

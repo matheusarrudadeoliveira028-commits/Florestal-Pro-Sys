@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "Production System",
-    "slug": "brekaz-producao",
+    "name": "Florestal Pro Sys",
+    "slug": "florestalprosys",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "productionsystem",
+    "scheme": "florestalprosys",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "br.com.brekaz.producao",
+      "bundleIdentifier": "br.com.brekaz.florestalprosys",
       "infoPlist": {
-        "NSCameraUsageDescription": "O Production System precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
-        "NSLocationWhenInUseUsageDescription": "O Production System utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
-        "NSPhotoLibraryUsageDescription": "O Production System precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
+        "NSCameraUsageDescription": "O sistema Florestal Pro Sys precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
+        "NSLocationWhenInUseUsageDescription": "O sistema Florestal Pro Sys utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
+        "NSPhotoLibraryUsageDescription": "O sistema Florestal Pro Sys precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
       }
     },
     "android": {
-      "package": "br.com.brekaz.producao",
+      "package": "br.com.brekaz.florestalprosys",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -37,7 +37,7 @@
       ]
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -45,13 +45,13 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "O Production System precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
+          "cameraPermission": "O sistema Florestal Pro Sys precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
         }
       ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "O Production System precisa da sua localização para registrar as coordenadas exatas da produção no campo."
+          "locationAlwaysAndWhenInUsePermission": "O sistema Florestal Pro Sys precisa da sua localização para registrar as coordenadas exatas da produção no campo."
         }
       ],
       [
@@ -75,9 +75,7 @@
     },
     "extra": {
       "router": {},
-      "eas": {
-        "projectId": "81aa797f-aa39-4d88-ae0b-fa8caab957a7"
-      }
+      "eas": {}
     },
     "owner": "brekaz"
   }

@@ -198,7 +198,7 @@ const styles = StyleSheet.create({
   tituloCard: { fontSize: 20, fontWeight: 'bold', color: '#2980B9', textAlign: 'center', marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#ECF0F1', paddingBottom: 12 },
   label: { fontSize: 14, fontWeight: 'bold', color: '#ffffff', marginBottom: 8, marginTop: 10 },
   input: { borderWidth: 1, borderColor: '#3abebe', borderRadius: 8, padding: 15, fontSize: 16, backgroundColor: '#F8FAFC', marginBottom: 5 },
-  button: { backgroundColor: '#27ae60', padding: 18, borderRadius: 8, alignItems: 'center', marginTop: 25 },
+  button: { backgroundColor: '#248549', padding: 18, borderRadius: 8, alignItems: 'center', marginTop: 25 },
   buttonText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   btnAlternar: { marginTop: 25, alignItems: 'center', padding: 10 },
   btnAlternarTexto: { color: '#3498DB', fontSize: 14, fontWeight: 'bold', textDecorationLine: 'underline' }

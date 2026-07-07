@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
   col: { flex: 1 },
   pickerWrapper: { borderWidth: 1, borderColor: '#BDC3C7', borderRadius: 8, backgroundColor: '#F8FAFC', height: 45, justifyContent: 'center', overflow: 'hidden' },
-  pickerItem: { height: 45, width: '100%', color: '#2C3E50' },
+  pickerItem: { height: 60, width: '100%', color: '#2C3E50' },
   pickerDisabled: { opacity: 0.5, backgroundColor: '#EAEDED' },
 
   placarCard: { backgroundColor: '#27AE60', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 15, elevation: 3 },
@@ -491,10 +491,10 @@ const styles = StyleSheet.create({
   ramalItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F2F4F4', alignItems: 'center' },
   ramalTexto: { fontSize: 14, color: '#2C3E50', fontWeight: 'bold' },
   
-  miniLabel: { fontSize: 11, color: '#7F8C8D', marginTop: 4, fontWeight: 'bold' },
-  miniPickerContainer: { backgroundColor: '#D4E6F1', borderRadius: 6, marginTop: 4, height: 40, justifyContent: 'center', overflow: 'hidden' },
+  miniLabel: { fontSize: 14, color: '#7F8C8D', marginTop: 4, fontWeight: 'bold' },
+  miniPickerContainer: { backgroundColor: '#D4E6F1', borderRadius: 6, marginTop: 4, height: 60, justifyContent: 'center', overflow: 'hidden' },
   pickerBloqueado: { backgroundColor: '#EAECEE', opacity: 0.8 }, 
-  miniPicker: { height: 40, color: '#2980B9', width: '100%', fontWeight: 'bold', fontSize: 12 },
+  miniPicker: { height: 60, color: '#2980B9', width: '100%', fontWeight: 'bold', fontSize: 12 },
 
   inputEditQtd: { backgroundColor: '#EAEDED', color: '#2C3E50', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, marginTop: 4, fontSize: 14, fontWeight: 'bold', textAlign: 'center', minWidth: 80, borderWidth: 1, borderColor: '#BDC3C7' },
   inputBloqueado: { backgroundColor: '#F8FAFC', color: '#95A5A6', borderColor: 'transparent' } 

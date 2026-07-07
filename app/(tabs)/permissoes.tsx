@@ -10,9 +10,13 @@ export default function PermissoesScreen() {
 
   const [permissoes, setPermissoes] = useState<any>({});
 
+  // 👉 NOVO: Adicionado 'estoque' e 'alertas' na lista de permissões
   const nomesTelas = [
+    { chave: 'estoque', nome: '📦 Estoque / Inventário' },
+    { chave: 'carregamentos', nome: '🚛 Expedição / Romaneio' },
     { chave: 'mapa', nome: '🗺️ Mapa Da Fazenda' },
     { chave: 'fechamento', nome: '💰 Fechamento Financeiro' },
+    { chave: 'alertas', nome: '🚨 Auditoria de Alertas' },
     { chave: 'usuarios', nome: '👥 Gestão De Acessos' },
     { chave: 'estatisticas', nome: '📊 Estatísticas De Produção' },
     { chave: 'ferias', nome: '🏖️ Férias' },
@@ -23,8 +27,7 @@ export default function PermissoesScreen() {
     { chave: 'relatorios', nome: '📄 Relatórios' },
     { chave: 'colaboradores', nome: '🤝 Colaboradores' },
     { chave: 'diarios', nome: '📖 Diário Reserva' },
-    { chave: 'retroativo', nome: '⏳ Lançamento Retroativo' },
-    { chave: 'carregamentos', nome: '🚛 Expedição / Romaneio' }
+    { chave: 'retroativo', nome: '⏳ Lançamento Retroativo' }
   ];
 
   useEffect(() => {

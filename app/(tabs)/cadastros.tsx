@@ -34,8 +34,11 @@ export default function CadastrosScreen() {
   const [listaServicos, setListaServicos] = useState<any[]>([]);
   const [listaSetores, setListaSetores] = useState<any[]>([]); 
   const [listaMapas, setListaMapas] = useState<any[]>([]); 
+  
+  // 👉 NOVO: Array para guardar os nomes únicos das fazendas
+  const [fazendasUnicas, setFazendasUnicas] = useState<string[]>([]);
 
-  // 👉 NOVO: Controle de Acesso
+  // 👉 Controle de Acesso
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
@@ -65,7 +68,12 @@ export default function CadastrosScreen() {
 
   const carregarMapas = async () => {
     const { data } = await supabase.from('mapa_fazendas').select('*').order('fazenda');
-    if (data) setListaMapas(data);
+    if (data) {
+      setListaMapas(data);
+      // 👉 Extrai apenas os nomes únicos das fazendas para jogar no Picker
+      const unicas = [...new Set(data.map(item => item.fazenda).filter(Boolean))] as string[];
+      setFazendasUnicas(unicas);
+    }
   };
 
   // === ESTADOS: COLABORADOR ===
@@ -81,7 +89,8 @@ export default function CadastrosScreen() {
   const [editandoServicoId, setEditandoServicoId] = useState<number | null>(null);
 
   // === ESTADOS: MAPA ===
-  const [nomeFazenda, setNomeFazenda] = useState('');
+  const [nomeFazendaSelecionada, setNomeFazendaSelecionada] = useState(''); // O que escolhe no Picker
+  const [nomeFazendaDigitada, setNomeFazendaDigitada] = useState(''); // O que digita se for nova
   const [numeroQuadra, setNumeroQuadra] = useState('');
   const [numeroRamal, setNumeroRamal] = useState('');
   const [totalPes, setTotalPes] = useState('');
@@ -166,7 +175,6 @@ export default function CadastrosScreen() {
     }
   };
 
-  // 👉 Função para o Admin bloquear serviços
   const alternarBloqueioDeServico = async (id: number, bloqueadoAtual: boolean) => {
     if (!isAdmin) {
       return alertaWebMobile("Acesso Negado", "Apenas Administradores podem bloquear ou liberar serviços.");
@@ -183,18 +191,21 @@ export default function CadastrosScreen() {
   };
 
   const salvarMapa = async () => {
-    // 👉 O SERVIÇO VINCULADO NÃO É MAIS OBRIGATÓRIO (Removi a trava)
-    if (!nomeFazenda || !numeroQuadra || !numeroRamal || !totalPes) {
+    // Decide qual será o nome final da fazenda para o banco
+    const fazendaFinal = nomeFazendaSelecionada === 'NOVA_FAZENDA' ? nomeFazendaDigitada.trim() : nomeFazendaSelecionada;
+
+    if (!fazendaFinal || !numeroQuadra || !numeroRamal || !totalPes) {
       return alertaWebMobile('Erro', 'Preencha todos os campos obrigatórios do mapa (Fazenda, Quadra, Ramal e Limite de Pés)!');
     }
+    
     setSalvando(true);
     
     const payload = { 
-      fazenda: nomeFazenda, 
-      quadra: numeroQuadra, 
-      ramal: numeroRamal, 
+      fazenda: fazendaFinal.toUpperCase(), 
+      quadra: numeroQuadra.trim(), 
+      ramal: numeroRamal.trim(), 
       total_pes: parseInt(totalPes),
-      servico_permitido: servicoVinculado // Vai em branco se não selecionou nada, o que é perfeito
+      servico_permitido: servicoVinculado 
     };
 
     let error;
@@ -257,7 +268,8 @@ export default function CadastrosScreen() {
   };
 
   const iniciarEdicaoMapa = (item: any) => {
-    setNomeFazenda(item.fazenda);
+    setNomeFazendaSelecionada(item.fazenda); // Já joga na caixa de seleção
+    setNomeFazendaDigitada('');
     setNumeroQuadra(item.quadra);
     setNumeroRamal(item.ramal);
     setTotalPes(item.total_pes ? item.total_pes.toString() : '');
@@ -266,7 +278,7 @@ export default function CadastrosScreen() {
   };
 
   const cancelarEdicaoMapa = () => {
-    setNomeFazenda(''); setNumeroQuadra(''); setNumeroRamal(''); setTotalPes(''); setServicoVinculado(''); setEditandoMapaId(null);
+    setNomeFazendaSelecionada(''); setNomeFazendaDigitada(''); setNumeroQuadra(''); setNumeroRamal(''); setTotalPes(''); setServicoVinculado(''); setEditandoMapaId(null);
   };
 
   const iniciarEdicaoSetor = (item: any) => {
@@ -278,7 +290,7 @@ export default function CadastrosScreen() {
     setNomeSetor(''); setEditandoSetorId(null);
   };
 
-  // === FUNÇÕES DE EXCLUSÃO COM CONFIRMAÇÃO WEB/MOBILE ===
+  // === FUNÇÕES DE EXCLUSÃO ===
   const excluirSetor = (id: number, nome: string) => {
     confirmacaoWebMobile('Excluir Setor', `Apagar o setor "${nome}"?`, async () => {
       await supabase.from('setores').delete().eq('id', id); 
@@ -427,12 +439,10 @@ export default function CadastrosScreen() {
                   <Text style={styles.itemDetalhe}>
                     R$ {item.preco_base?.toFixed(2)} por {item.tipo_cobranca === 'milheiro' ? '1000 Pés' : 'Unidade'}
                   </Text>
-                  {/* 👉 NOVO: Aviso visual de bloqueio */}
                   {item.bloqueado && <Text style={{fontSize: 10, color: '#C0392B', fontWeight: 'bold', marginTop: 2}}>BLOQUEADO PARA FISCAIS</Text>}
                 </View>
                 
                 <View style={{flexDirection: 'row', gap: 10, alignItems: 'center'}}>
-                  {/* 👉 NOVO: Botão de Bloqueio Rápido pro Admin */}
                   {isAdmin && (
                     <Switch
                       trackColor={{ false: "#27AE60", true: "#E74C3C" }} 
@@ -454,8 +464,35 @@ export default function CadastrosScreen() {
         <View style={styles.card}>
           <Text style={styles.formTitle}>{editandoMapaId ? '✏️ Editando Ramal' : 'Mapear Novo Ramal'}</Text>
           
+          {/* 👉 NOVO: CAIXA DE SELEÇÃO INTELIGENTE DE FAZENDA */}
           <Text style={styles.label}>Fazenda:</Text>
-          <TextInput style={styles.input} placeholder="Ex: Boa Vista" value={nomeFazenda} onChangeText={setNomeFazenda}/>
+          <View style={[styles.pickerContainer, { marginBottom: nomeFazendaSelecionada === 'NOVA_FAZENDA' ? 10 : 0 }]}>
+            <Picker 
+              selectedValue={nomeFazendaSelecionada} 
+              onValueChange={(val) => {
+                setNomeFazendaSelecionada(val);
+                if (val !== 'NOVA_FAZENDA') setNomeFazendaDigitada(''); 
+              }} 
+              style={styles.picker}
+            >
+              <Picker.Item label="Selecione a fazenda..." value="" />
+              {fazendasUnicas.map((fazenda, index) => (
+                <Picker.Item key={index} label={fazenda} value={fazenda} />
+              ))}
+              <Picker.Item label="➕ Adicionar Nova Fazenda..." value="NOVA_FAZENDA" color="#2980B9" />
+            </Picker>
+          </View>
+
+          {/* SÓ APARECE SE ELE ESCOLHEU "ADICIONAR NOVA FAZENDA" NO PICKER */}
+          {nomeFazendaSelecionada === 'NOVA_FAZENDA' && (
+            <TextInput 
+              style={styles.input} 
+              placeholder="Digite o nome da NOVA fazenda" 
+              value={nomeFazendaDigitada} 
+              onChangeText={setNomeFazendaDigitada}
+              autoCapitalize="characters"
+            />
+          )}
 
           <View style={styles.row}>
             <View style={styles.col}><Text style={styles.label}>Quadra:</Text><TextInput style={styles.input} placeholder="Ex: 12" value={numeroQuadra} onChangeText={setNumeroQuadra}/></View>
@@ -465,7 +502,6 @@ export default function CadastrosScreen() {
           <Text style={styles.label}>Limite de Pés do Ramal:</Text>
           <TextInput style={styles.input} placeholder="Ex: 1500" keyboardType="numeric" value={totalPes} onChangeText={setTotalPes}/>
 
-          {/* 👉 AGORA É OPCIONAL */}
           <Text style={styles.label}>Serviço Padrão deste Ramal (Opcional):</Text>
           <View style={styles.pickerContainer}>
             <Picker selectedValue={servicoVinculado} onValueChange={setServicoVinculado} style={styles.picker}>

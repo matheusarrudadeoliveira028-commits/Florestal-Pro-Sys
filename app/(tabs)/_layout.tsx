@@ -7,7 +7,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '../../src/supabase';
 
 export default function DrawerLayout() {
-  // 👉 NOVO: Pega a largura da tela para a inteligência de responsividade
   const { width } = useWindowDimensions();
   const isTelaGrande = width >= 768;
 
@@ -34,18 +33,15 @@ export default function DrawerLayout() {
       setIsAdmin(ehAdmin);
 
       if (!ehAdmin && cargoDoUsuario) {
-        // 👉 BUSCA BLINDADA: Trazemos todas as regras e filtramos no JavaScript para não bugar o banco
         const { data, error } = await supabase.from('permissoes_menu').select('*');
         
         if (data) {
-          // Procura o cargo ignorando maiúsculas e minúsculas
           const regraDoCargo = data.find(item => item.cargo && item.cargo.toLowerCase() === cargoDoUsuario.toLowerCase());
           
           if (regraDoCargo && regraDoCargo.telas) {
             const regras = typeof regraDoCargo.telas === 'string' ? JSON.parse(regraDoCargo.telas) : regraDoCargo.telas;
             setPermissoesAtivas(regras);
           } else {
-            // 👉 O DEDO-DURO: Se chegar aqui, o cargo dele não existe na tabela de permissões!
             Alert.alert(
               "Aviso de Acesso", 
               `Nenhuma regra de menu encontrada para o seu cargo: "${cargoDoUsuario}". \nPeça ao Administrador para configurar no Painel.`
@@ -61,9 +57,8 @@ export default function DrawerLayout() {
   };
 
   const ocultarVisul = (chaveTela: string) => {
-    if (isAdmin) return {}; // Admin vê tudo
+    if (isAdmin) return {}; 
     
-    // Mostra se for true booleano ou "true" em texto
     if (permissoesAtivas[chaveTela] === true || permissoesAtivas[chaveTela] === "true") {
       return {}; 
     }
@@ -83,7 +78,6 @@ export default function DrawerLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Drawer
         screenOptions={{
-          // 👉 NOVA REGRA: Fixo na Web (permanent), esconde no celular (front)
           drawerType: isTelaGrande ? 'permanent' : 'front',
           drawerStyle: {
             width: isTelaGrande ? 280 : 250,
@@ -112,12 +106,32 @@ export default function DrawerLayout() {
         />
 
         <Drawer.Screen
+          name="estoque"
+          options={{
+            drawerLabel: 'Estoque / Inventário',
+            title: 'Estoque',
+            drawerIcon: ({ color, size }) => <Ionicons name="cube" size={size} color={color} />,
+            drawerItemStyle: ocultarVisul('estoque')
+          }}
+        />
+
+        <Drawer.Screen
+          name="carregamentos"
+          options={{
+            drawerLabel: 'Expedição / Romaneio',
+            title: 'Carregamentos',
+            drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="truck" size={size} color={color} />,
+            drawerItemStyle: ocultarVisul('carregamentos') // 👉 CORRIGIDO AQUI!
+          }}
+        />
+
+        <Drawer.Screen
           name="diarios"
           options={{
             drawerLabel: 'Diário Reserva',
             title: 'Diário',
             drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="book-open-page-variant" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('cadastros')
+            drawerItemStyle: ocultarVisul('diarios') // 👉 CORRIGIDO AQUI!
           }}
         />
 
@@ -127,7 +141,7 @@ export default function DrawerLayout() {
             drawerLabel: 'Lançamento Retroativo',
             title: 'Exceções',
             drawerIcon: ({ color, size }) => <Ionicons name="time" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('cadastros')
+            drawerItemStyle: ocultarVisul('retroativo') // 👉 CORRIGIDO AQUI!
           }}
         />
 
@@ -148,6 +162,16 @@ export default function DrawerLayout() {
             title: 'Auditoria',
             drawerIcon: ({ color, size }) => <Ionicons name="camera" size={size} color={color} />,
             drawerItemStyle: ocultarVisul('auditoria')
+          }}
+        />
+
+        <Drawer.Screen
+          name="alertas"
+          options={{
+            drawerLabel: 'Auditoria de Alertas',
+            title: 'Alertas',
+            drawerIcon: ({ color, size }) => <Ionicons name="warning" size={size} color={color} />,
+            drawerItemStyle: ocultarVisul('alertas')
           }}
         />
 
@@ -204,8 +228,8 @@ export default function DrawerLayout() {
         <Drawer.Screen
           name="suporte"
           options={{
-            drawerLabel: 'suporte',
-            title: 'suporte',
+            drawerLabel: 'Suporte',
+            title: 'Suporte',
             drawerIcon: ({ color, size }) => <Ionicons name="compass" size={size} color={color} />,
             drawerItemStyle: ocultarVisul('suporte')
           }}
@@ -228,16 +252,6 @@ export default function DrawerLayout() {
             title: 'Cadastros',
             drawerIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} />,
             drawerItemStyle: ocultarVisul('cadastros')
-          }}
-        />
-
-        <Drawer.Screen
-          name="carregamentos"
-          options={{
-            drawerLabel: 'Expedição / Romaneio',
-            title: 'Carregamentos',
-            drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="truck" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('relatorios')
           }}
         />
 

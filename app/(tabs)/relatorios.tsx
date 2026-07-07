@@ -5,7 +5,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { supabase } from '../../src/supabase';
+import { supabase } from '../../src/supabase'; // Ajuste o caminho se necessário
 
 // 👉 ALGORITMO OFFLINE DE FERIADOS NACIONAIS (Fixos + Móveis como Páscoa e Carnaval)
 const obterFeriadosNacionais = (ano: number) => {
@@ -21,7 +21,6 @@ const obterFeriadosNacionais = (ano: number) => {
     '25/12'  // Natal
   ];
 
-  // Cálculo exato da Páscoa
   const a = ano % 19;
   const b = Math.floor(ano / 100);
   const c = ano % 100;
@@ -51,32 +50,36 @@ const obterFeriadosNacionais = (ano: number) => {
   feriados.push(formatar(addDias(pascoa, -2)));  // Sexta-feira Santa
   feriados.push(formatar(addDias(pascoa, 60)));  // Corpus Christi
 
-  // Converte para o formato ISO (YYYY-MM-DD) para facilitar a comparação no código
   return feriados.map(dMes => `${ano}-${dMes.split('/')[1]}-${dMes.split('/')[0]}`);
 };
 
 export default function RelatoriosScreen() {
-  const [colaboradorSelecionado, setColaboradorSelecionado] = useState('');
+  const [colaboradorSelecionado, setColaboradorSelecionado] = useState('TODOS');
+  const [fiscalSelecionado, setFiscalSelecionado] = useState('TODOS');
   
   // DATAS E FERIADOS
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [feriados, setFeriados] = useState('');
+  const [filtroAtivo, setFiltroAtivo] = useState('');
 
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
+  const [listaFiscais, setListaFiscais] = useState<string[]>([]);
+  
   const [gerando, setGerando] = useState(false);
   const [carregando, setCarregando] = useState(true);
 
   useEffect(() => {
     carregarColaboradores();
+    carregarFiscais();
     
-    // Sugere o mês atual preenchido automaticamente
+    // Sugere a quinzena atual automaticamente baseada no dia de hoje
     const hoje = new Date();
-    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-    
-    setDataInicio(primeiroDia.toLocaleDateString('pt-BR'));
-    setDataFim(ultimoDia.toLocaleDateString('pt-BR'));
+    if (hoje.getDate() <= 15) {
+      aplicarFiltroData('1Q');
+    } else {
+      aplicarFiltroData('2Q');
+    }
   }, []);
 
   const carregarColaboradores = async () => {
@@ -84,6 +87,36 @@ export default function RelatoriosScreen() {
     const { data } = await supabase.from('colaboradores').select('*').order('nome');
     if (data) setListaColaboradores(data);
     setCarregando(false);
+  };
+
+  const carregarFiscais = async () => {
+    // Varre o banco de dados atrás de todos os Fiscais/Encarregados já registrados
+    const { data } = await supabase.from('diarios_campo').select('fiscal_nome');
+    if (data) {
+      const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))];
+      setListaFiscais(unicos.sort() as string[]);
+    }
+  };
+
+  // 👉 LÓGICA DE BOTÕES RÁPIDOS (QUINZENAS E MÊS)
+  const aplicarFiltroData = (tipo: '1Q' | '2Q' | 'MES') => {
+    setFiltroAtivo(tipo);
+    const hoje = new Date();
+    const ano = hoje.getFullYear();
+    const mes = hoje.getMonth(); // 0 a 11
+    
+    if (tipo === '1Q') {
+      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      setDataFim(`15/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    } else if (tipo === '2Q') {
+      setDataInicio(`16/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      const ultimoDia = new Date(ano, mes + 1, 0).getDate(); 
+      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    } else {
+      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    }
   };
 
   const converterDataParaBanco = (dataBR: string) => {
@@ -101,13 +134,11 @@ export default function RelatoriosScreen() {
     return `${y}-${m}-${d}`;
   };
 
-  // 👉 TRITURADOR DE NOMES
   const limparNome = (nome: string) => {
     if (!nome) return '';
     return nome.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
   };
 
-  // 👉 EXTRATOR UNIVERSAL DE DATAS (Resolve o bug do formato Americano x Brasileiro)
   const extrairAdmissaoISO = (admStr: any) => {
     if (!admStr) return null;
     let limpa = String(admStr).split('T')[0].split(' ')[0].trim();
@@ -133,7 +164,6 @@ export default function RelatoriosScreen() {
   };
 
   const gerarPDF = async () => {
-    if (!colaboradorSelecionado) return Alert.alert('Aviso', 'Selecione um colaborador (ou Todos)!');
     if (!dataInicio || !dataFim) return Alert.alert('Aviso', 'Preencha a data inicial e final!');
 
     const dtInicioBD = converterDataParaBanco(dataInicio);
@@ -154,7 +184,7 @@ export default function RelatoriosScreen() {
     setGerando(true);
 
     try {
-      // 👉 CARREGAMENTO DO LOGO À PROVA DE BALAS (EXPO GO + APK + WEB)
+      // CARREGAMENTO DO LOGO 
       let base64Logo = '';
       try {
         const asset = Asset.fromModule(require('../../assets/images/logo.png'));
@@ -164,8 +194,6 @@ export default function RelatoriosScreen() {
           base64Logo = asset.uri;
         } else {
           let uriDaImagem = asset.localUri || asset.uri;
-          
-          // Se for Expo Go (http), o Android bloqueia. Resolvemos baixando o arquivo fisicamente!
           if (uriDaImagem.startsWith('http')) {
             const { uri } = await FileSystem.downloadAsync(
               uriDaImagem,
@@ -173,8 +201,6 @@ export default function RelatoriosScreen() {
             );
             uriDaImagem = uri;
           }
-          
-          // Converte para Base64 puro. O HTML renderiza nativamente sem bloqueios de segurança do Android.
           const base64 = await FileSystem.readAsStringAsync(uriDaImagem, {
             encoding: FileSystem.EncodingType.Base64,
           });
@@ -184,11 +210,18 @@ export default function RelatoriosScreen() {
         console.warn("Aviso: Não foi possível carregar a logo para o PDF.", imgErr);
       }
 
+      // 🔍 LÓGICA DE FILTRAGEM (FISCAL E COLABORADOR)
       let query = supabase.from('diarios_campo').select('*')
         .gte('data', `${dtInicioBD} 00:00:00`)
         .lte('data', `${dtFimBD} 23:59:59`)
         .order('data', { ascending: true });
 
+      // Filtra por Fiscal se não for TODOS
+      if (fiscalSelecionado !== 'TODOS') {
+        query = query.eq('fiscal_nome', fiscalSelecionado);
+      }
+
+      // Filtra por Colaborador se não for TODOS
       if (colaboradorSelecionado !== 'TODOS') {
         query = query.eq('colaborador', colaboradorSelecionado);
       }
@@ -198,7 +231,7 @@ export default function RelatoriosScreen() {
 
       if (!lancamentos || lancamentos.length === 0) {
         setGerando(false);
-        return Alert.alert('Aviso', 'Nenhum lançamento encontrado neste período.');
+        return Alert.alert('Aviso', 'Nenhum lançamento encontrado para este filtro neste período.');
       }
 
       const { data: feriasDB } = await supabase.from('ferias').select('*');
@@ -239,6 +272,8 @@ export default function RelatoriosScreen() {
         const encarregadoNome = folha.registros.length > 0 && folha.registros[0].fiscal_nome 
             ? folha.registros[0].fiscal_nome 
             : 'Não Identificado';
+
+        const fazendasTrabalhadas = [...new Set(folha.registros.map((r: any) => r.fazenda).filter(Boolean))].join(' / ') || 'Não Informada';
 
         const nomeLimpoFolha = limparNome(folha.nome);
         const dadosDoColaborador = listaColaboradores.find(c => limparNome(c.nome) === nomeLimpoFolha);
@@ -314,19 +349,20 @@ export default function RelatoriosScreen() {
 
         const pagina = `
           <div class="page-container">
+            <!-- CABEÇALHO NOVO E LIMPO (SEM ENDEREÇO, COM FISCAL) -->
             <div class="header-container">
               ${base64Logo ? `<div class="header-logo"><img src="${base64Logo}" alt="Logo" /></div>` : ''}
               <div class="header-left">
                 <p>Período: <strong>${dataInicio} até ${dataFim}</strong></p>
-                <p>Encarregado: <strong style="text-transform: uppercase;">${encarregadoNome}</strong></p>
-                ${folha.tipo === 'Registrado' ? '' : `<p>Produção: <strong style="color: #E74C3C; text-transform: uppercase;">${folha.tipo}</strong></p>`}
+                <p>Fazenda(s): <strong style="font-size: 14px;">${fazendasTrabalhadas}</strong></p>
                 <p>Colaborador: <strong style="font-size: 16px; text-transform: uppercase;">${folha.nome}</strong></p>
+                ${folha.tipo === 'Registrado' ? '' : `<p>Produção: <strong style="color: #E74C3C; text-transform: uppercase;">${folha.tipo}</strong></p>`}
               </div>
+              
+              <!-- 🟢 ÁREA DO FISCAL NO LADO DIREITO -->
               <div class="header-right">
-                <p><strong>Luiz Felipe Areovaldo Calhim Manoel Abud</strong></p>
-                <p>Fazenda Acauã s/n Bairro Pirambóia</p>
-                <p>Anhembi SP Cep 18.620-000</p>
-                <p>Tel: (14) 3361-7492/3361-9274 Escritório</p>
+                <p style="color: #555; font-size: 11px;">Fiscal / Encarregado</p>
+                <p><strong style="font-size: 15px; text-transform: uppercase; color: #2C3E50;">${encarregadoNome}</strong></p>
               </div>
             </div>
 
@@ -345,22 +381,33 @@ export default function RelatoriosScreen() {
               </thead>
               <tbody>
                 ${linhasTabela}
+                <tr>
+                  <td colspan="5" style="text-align: right; font-weight: bold; background-color: #E8E8E8;">QUANTIDADE TOTAL:</td>
+                  <td style="font-weight: bold; background-color: #E8E8E8; font-size: 13px;">${totalQuantidade}</td>
+                  <td colspan="2" style="background-color: #E8E8E8;"></td>
+                </tr>
               </tbody>
             </table>
 
-            <div class="footer-container">
-              <div>
-                <p style="margin-top: 40px; font-size: 12px; font-style: italic;">declaro ter recebido os valores acima</p>
-              </div>
-              <div class="footer-totals">
-                <p style="font-size: 15px; margin-bottom: 8px;">Total Produzido: <strong>${totalQuantidade}</strong></p>
-                <p style="font-size: 18px;">A receber: <strong>R$ ${totalGeral.toFixed(2).replace('.', ',')}</strong></p>
-              </div>
-            </div>
+            <!-- RECIBO OFICIAL -->
+            <table style="width: 100%; border-collapse: collapse; margin-top: 30px; border: 1px solid #000;">
+              <tr>
+                <td style="text-align: center; font-weight: bold; font-size: 16px; padding: 6px; border-bottom: 1px solid #000;">RECIBO</td>
+              </tr>
+              <tr>
+                <td style="text-align: center; padding: 15px; font-size: 13px; line-height: 1.6;">
+                  Declaro ter recebido da empresa LUIZ FELIPE AREOVALDO CALHIM MANOEL ABUD, CNPJ nº 08.396.358/0007-82, a importância total de 
+                  <strong style="font-size: 15px;">R$ ${totalGeral.toFixed(2).replace('.', ',')}</strong> 
+                  referente a produção conforme respectivas datas e valores discriminados:
+                </td>
+              </tr>
+            </table>
 
+            <!-- ÁREA DE ASSINATURA -->
             <div class="signature-area">
-              <hr style="width: 300px; border: 1px solid #000;">
-              <p style="font-size: 14px; font-weight: bold;">Assinatura do Colaborador</p>
+              <hr style="width: 350px; border: 1px solid #000; margin-bottom: 5px;">
+              <p style="font-size: 14px; font-weight: bold; text-transform: uppercase;">${folha.nome}</p>
+              <p style="font-size: 11px; color: #555;">Assinatura do Colaborador</p>
             </div>
           </div>
           ${index < chavesFolhas.length - 1 ? '<div class="quebra-pagina"></div>' : ''}
@@ -373,24 +420,22 @@ export default function RelatoriosScreen() {
         <!DOCTYPE html>
         <html>
           <head>
-            <title>Relatório de Produção - ${colaboradorSelecionado}</title>
+            <title>Relatório de Produção - Quinzenal</title>
             <style>
               @page { margin: 15mm; size: A4; }
-              body { font-family: 'Arial', sans-serif; font-size: 13px; color: #000; background-color: #FFF; margin: 0; padding: 0; }
+              body { font-family: 'Arial', sans-serif; font-size: 12px; color: #000; background-color: #FFF; margin: 0; padding: 0; }
               .quebra-pagina { page-break-after: always; }
-              .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 25px; border-bottom: 2px solid #000; padding-bottom: 15px; }
+              .header-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #000; padding-bottom: 10px; }
               .header-logo { margin-right: 15px; display: flex; align-items: center; justify-content: center; }
-              .header-logo img { max-height: 80px; max-width: 120px; object-fit: contain; }
+              .header-logo img { max-height: 70px; max-width: 100px; object-fit: contain; }
               .header-left { flex: 1; }
-              .header-left p, .header-right p { margin: 4px 0; font-size: 14px; }
-              .header-right { text-align: right; }
-              table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-              th, td { border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 11px; }
+              .header-left p, .header-right p { margin: 4px 0; font-size: 13px; }
+              .header-right { text-align: right; background-color: #F8F9F9; padding: 10px 15px; border-radius: 8px; border: 1px solid #E5E8E8; }
+              table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+              th, td { border: 1px solid #000; padding: 5px 4px; text-align: center; font-size: 11px; }
               th { background-color: #E8E8E8; font-weight: bold; text-transform: uppercase; font-size: 10px; }
               tr:nth-child(even) { background-color: #F9F9F9; }
-              .footer-container { display: flex; justify-content: space-between; margin-top: 30px; }
-              .footer-totals p { margin: 4px 0; text-align: right; }
-              .signature-area { margin-top: 80px; text-align: center; page-break-inside: avoid; }
+              .signature-area { margin-top: 60px; text-align: center; page-break-inside: avoid; }
             </style>
           </head>
           <body>
@@ -399,7 +444,7 @@ export default function RelatoriosScreen() {
         </html>
       `;
 
-      // 👉 BIFURCAÇÃO PERFEITA WEB x MOBILE
+      // BIFURCAÇÃO PERFEITA WEB x MOBILE
       if (Platform.OS === 'web') {
         const iframe = document.createElement('iframe');
         iframe.style.position = 'absolute';
@@ -426,7 +471,6 @@ export default function RelatoriosScreen() {
         }, 500);
 
       } else {
-        // No ANDROID / iOS:
         const { uri } = await Print.printToFileAsync({ html: htmlCompleto });
         await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
@@ -442,29 +486,61 @@ export default function RelatoriosScreen() {
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }}>
       <View style={styles.header}>
         <Text style={styles.title}>Folha de Produção 📄</Text>
-        <Text style={styles.subtitle}>Gerar extratos por período</Text>
+        <Text style={styles.subtitle}>Gerar extratos e recibos</Text>
       </View>
 
       <View style={styles.card}>
+        
+        {/* 👉 BOTÕES DE QUINZENA RÁPIDA */}
+        <Text style={styles.label}>Período de Fechamento:</Text>
+        <View style={styles.botoesQuinzena}>
+          <TouchableOpacity 
+            style={[styles.btnQuinzena, filtroAtivo === '1Q' && styles.btnQuinzenaAtivo]}
+            onPress={() => aplicarFiltroData('1Q')}
+          >
+            <Text style={[styles.txtBtnQuinzena, filtroAtivo === '1Q' && styles.txtBtnQuinzenaAtivo]}>1ª Quinzena</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.btnQuinzena, filtroAtivo === '2Q' && styles.btnQuinzenaAtivo]}
+            onPress={() => aplicarFiltroData('2Q')}
+          >
+            <Text style={[styles.txtBtnQuinzena, filtroAtivo === '2Q' && styles.txtBtnQuinzenaAtivo]}>2ª Quinzena</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.btnQuinzena, filtroAtivo === 'MES' && styles.btnQuinzenaAtivo]}
+            onPress={() => aplicarFiltroData('MES')}
+          >
+            <Text style={[styles.txtBtnQuinzena, filtroAtivo === 'MES' && styles.txtBtnQuinzenaAtivo]}>Mês Cheio</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.row}>
           <View style={styles.col}>
-            <Text style={styles.label}>Data Inicial:</Text>
+            <Text style={styles.labelData}>Data Inicial:</Text>
             <TextInput style={styles.input} value={dataInicio} onChangeText={setDataInicio} placeholder="DD/MM/AAAA" keyboardType="numeric" />
           </View>
           <View style={styles.col}>
-            <Text style={styles.label}>Data Final:</Text>
+            <Text style={styles.labelData}>Data Final:</Text>
             <TextInput style={styles.input} value={dataFim} onChangeText={setDataFim} placeholder="DD/MM/AAAA" keyboardType="numeric" />
           </View>
         </View>
 
-        <Text style={styles.label}>Feriados Municipais/Locais (Apenas os dias):</Text>
-        <TextInput 
-          style={styles.input} 
-          value={feriados} 
-          onChangeText={setFeriados} 
-          placeholder="Ex: 01, 15 (Nacionais já são automáticos)" 
-          keyboardType="numbers-and-punctuation" 
-        />
+        {/* 🟢 NOVO CAMPO: SELEÇÃO DE FISCAL */}
+        <Text style={styles.label}>Selecione o Fiscal / Encarregado:</Text>
+        {carregando ? (
+          <ActivityIndicator color="#2980B9" />
+        ) : (
+          <View style={styles.pickerContainer}>
+            <Picker selectedValue={fiscalSelecionado} onValueChange={setFiscalSelecionado} style={styles.picker}>
+              <Picker.Item label="👉 TODOS OS FISCAIS / EQUIPES" value="TODOS" />
+              {listaFiscais.map((nome, index) => (
+                <Picker.Item key={index} label={nome} value={nome} />
+              ))}
+            </Picker>
+          </View>
+        )}
 
         <Text style={styles.label}>Selecione o Colaborador:</Text>
         {carregando ? (
@@ -472,8 +548,7 @@ export default function RelatoriosScreen() {
         ) : (
           <View style={styles.pickerContainer}>
             <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado} style={styles.picker}>
-              <Picker.Item label="Escolha..." value="" />
-              <Picker.Item label="👉 TODOS OS FUNCIONÁRIOS" value="TODOS" />
+              <Picker.Item label="👉 TODOS OS COLABORADORES" value="TODOS" />
               {listaColaboradores.map((item) => (
                 <Picker.Item key={item.id} label={item.nome} value={item.nome} />
               ))}
@@ -481,7 +556,7 @@ export default function RelatoriosScreen() {
           </View>
         )}
 
-        <TouchableOpacity style={[styles.button, gerando || !colaboradorSelecionado ? styles.buttonDisabled : null]} onPress={gerarPDF} disabled={gerando || !colaboradorSelecionado}>
+        <TouchableOpacity style={[styles.button, gerando ? styles.buttonDisabled : null]} onPress={gerarPDF} disabled={gerando}>
           {gerando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>Gerar Relatório em PDF</Text>}
         </TouchableOpacity>
       </View>
@@ -491,17 +566,23 @@ export default function RelatoriosScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F7FA', padding: 20 },
-  header: { marginBottom: 30, marginTop: 20, alignItems: 'center' },
+  header: { marginBottom: 25, marginTop: 10, alignItems: 'center' },
   title: { fontSize: 28, fontWeight: 'bold', color: '#2C3E50' },
   subtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
   card: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 15, elevation: 5 },
-  label: { fontSize: 14, fontWeight: '700', color: '#34495E', marginBottom: 10, marginTop: 10 },
+  label: { fontSize: 14, fontWeight: '700', color: '#34495E', marginBottom: 10, marginTop: 15 },
+  labelData: { fontSize: 12, fontWeight: '600', color: '#7F8C8D', marginBottom: 5 },
   input: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 16, backgroundColor: '#F8FAFC', color: '#2C3E50', marginBottom: 10 },
-  pickerContainer: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, backgroundColor: '#F8FAFC', overflow: 'hidden', marginBottom: 25, marginTop: 10 },
+  pickerContainer: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, backgroundColor: '#F8FAFC', overflow: 'hidden', marginBottom: 15, marginTop: 5 },
   picker: { height: 50, width: '100%', borderWidth: 0, backgroundColor: 'transparent' },
-  button: { backgroundColor: '#2980B9', padding: 15, borderRadius: 8, alignItems: 'center' },
+  button: { backgroundColor: '#2980B9', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 15 },
   buttonDisabled: { backgroundColor: '#AED6F1' },
   buttonText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-  row: { flexDirection: 'row', justifyContent: 'space-between' },
+  row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   col: { width: '48%' },
+  botoesQuinzena: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  btnQuinzena: { flex: 1, paddingVertical: 10, borderWidth: 1, borderColor: '#2980B9', borderRadius: 6, marginHorizontal: 3, alignItems: 'center', backgroundColor: '#FFF' },
+  btnQuinzenaAtivo: { backgroundColor: '#2980B9' },
+  txtBtnQuinzena: { color: '#2980B9', fontSize: 12, fontWeight: 'bold' },
+  txtBtnQuinzenaAtivo: { color: '#FFF' },
 });
