@@ -1,13 +1,13 @@
 {
   "expo": {
     "name": "Resinas Abud",
-    "slug": "resinasabud",
+    "slug": "florestalprosys",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "resinasabud",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "br.com.brekaz.resinasabud",
