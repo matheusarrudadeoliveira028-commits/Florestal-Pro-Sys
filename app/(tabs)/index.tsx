@@ -129,7 +129,8 @@ export default function HomeScreen() {
     try {
       let { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
       const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
-      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
+      // 👉 BUSCA OTIMIZADA APLICADA AQUI PARA NÃO ESTOURAR A MEMÓRIA!
+      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes, data_bloqueio');
       const { data: config, error: errConfig } = await supabase.from('configuracoes').select('*').single();
 
       if (errColab || errServ || errMapa) throw new Error("Sem rede");
@@ -230,7 +231,6 @@ export default function HomeScreen() {
 
   const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
   
-  // 👉 MÁGICA DE PROTEÇÃO: O app só permite múltiplos se o admin mandou ou se a palavra for "coleta" como fallback de segurança.
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
   const toggleRamal = (ramalStr: string) => {
@@ -252,7 +252,6 @@ export default function HomeScreen() {
   const handleMudancaQuantidade = (texto: string) => {
     const valorDigitado = parseInt(texto) || 0;
     
-    // O limite só é barrado se o serviço não for de múltiplos ramais
     if (!permiteMultiplosRamais && limitePes !== null && valorDigitado > limitePes) {
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{

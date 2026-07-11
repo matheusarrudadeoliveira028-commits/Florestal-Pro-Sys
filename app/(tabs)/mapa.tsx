@@ -75,7 +75,6 @@ const RamalItem = memo(({ r, podeEditar, listaServicos, onAtualizar }: any) => {
   );
 });
 
-// Componente para a Aba de Resumo Leve
 const ResumoCard = memo(({ fazenda, total, quadras }: any) => {
   const [expandido, setExpandido] = useState(false);
 
@@ -131,7 +130,6 @@ export default function MapaScreen() {
   const [buscaQuadra, setBuscaQuadra] = useState('');
   const [buscaRamal, setBuscaRamal] = useState('');
 
-  // 👉 InteractionManager APLICADO AQUI
   useEffect(() => {
     const tarefa = InteractionManager.runAfterInteractions(() => {
       verificarPerfil();
@@ -245,12 +243,14 @@ export default function MapaScreen() {
     setCarregando(true);
 
     try {
-      let query = supabase.from('mapa_fazendas').select('*').eq('fazenda', buscaFazenda);
+      // 👉 CORREÇÃO 2: Vazamento de memória resolvido (Seleciona apenas o necessário)
+      let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').eq('fazenda', buscaFazenda);
       
       if (buscaQuadra) query = query.eq('quadra', buscaQuadra);
       if (buscaRamal) query = query.eq('ramal', buscaRamal);
 
-      const { data, error } = await query.limit(100);
+      // 👉 CORREÇÃO 1: Limite aumentado para não cortar ramais grandes
+      const { data, error } = await query.limit(3000);
         
       if (error) throw new Error("Falha na rede");
       
@@ -267,11 +267,24 @@ export default function MapaScreen() {
     } catch (error) {
       setIsOffline(true);
       const mapaOffline = await AsyncStorage.getItem('@mochila_mapa_ultimo');
+      
       if (mapaOffline) {
-        const dadosOff = JSON.parse(mapaOffline);
-        setDadosBrutos(dadosOff);
-        processarDadosMapa(dadosOff);
-        alertaHibrido("Offline", "Mostrando a última busca detalhada salva no tablet.");
+        let dadosOff = JSON.parse(mapaOffline);
+        
+        // 👉 CORREÇÃO 3: Filtro local no modo offline
+        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => i.fazenda === buscaFazenda);
+        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => i.quadra === buscaQuadra);
+        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => String(i.ramal) === String(buscaRamal));
+
+        if (dadosOff.length > 0) {
+          setDadosBrutos(dadosOff);
+          processarDadosMapa(dadosOff);
+          alertaHibrido("Offline", "Mostrando dados salvos no tablet.");
+        } else {
+          alertaHibrido("Offline", "O filtro selecionado não estava salvo no tablet.");
+          setDadosBrutos([]);
+          processarDadosMapa([]);
+        }
       } else {
         setDadosBrutos([]);
         processarDadosMapa([]);
