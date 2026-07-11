@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "Florestal Pro Sys",
-    "slug": "florestalprosys",
+    "name": "Resinas Abud",
+    "slug": "resinasabud",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
-    "scheme": "florestalprosys",
+    "scheme": "resinasabud",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "br.com.brekaz.florestalprosys",
+      "bundleIdentifier": "br.com.brekaz.resinasabud",
       "infoPlist": {
-        "NSCameraUsageDescription": "O sistema Florestal Pro Sys precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
-        "NSLocationWhenInUseUsageDescription": "O sistema Florestal Pro Sys utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
-        "NSPhotoLibraryUsageDescription": "O sistema Florestal Pro Sys precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
+        "NSCameraUsageDescription": "O sistema Resinas Abud precisa acessar a câmera para realizar a auditoria visual e prova de vida da equipe.",
+        "NSLocationWhenInUseUsageDescription": "O sistema Resinas Abud utiliza sua localização para mapear os pontos de colheita e gerenciar os talhões no mapa da fazenda.",
+        "NSPhotoLibraryUsageDescription": "O sistema Resinas Abud precisa de acesso à galeria para salvar e compartilhar os relatórios de auditoria em PDF."
       }
     },
     "android": {
-      "package": "br.com.brekaz.florestalprosys",
+      "package": "br.com.brekaz.resinasabud",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -45,13 +45,13 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "O sistema Florestal Pro Sys precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
+          "cameraPermission": "O sistema Resinas Abud precisa acessar a câmera para realizar a auditoria visual (Prova de Vida) da equipe no campo."
         }
       ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "O sistema Florestal Pro Sys precisa da sua localização para registrar as coordenadas exatas da produção no campo."
+          "locationAlwaysAndWhenInUsePermission": "O sistema Resinas Abud precisa da sua localização para registrar as coordenadas exatas da produção no campo."
         }
       ],
       [
@@ -75,7 +75,9 @@
     },
     "extra": {
       "router": {},
-      "eas": {}
+      "eas": {
+        "projectId": "0749477c-819a-4c13-9f19-70d6f7a9463b"
+      }
     },
     "owner": "brekaz"
   }

@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler'; // 👉 MÁGICA DO MENU LATERAL (LINHA 1 OBRIGATÓRIA)
+import { GestureHandlerRootView } from 'react-native-gesture-handler'; // 👉 ADICIONADO AQUI!
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
@@ -110,15 +111,18 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        {/* Agora o sistema sabe que existe uma tela separada só para o Login! */}
-        <Stack.Screen name="login" /> 
-        <Stack.Screen name="index" /> 
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    // 👉 ENVOLVENDO TUDO COM O GESTURE HANDLER AQUI NA RAIZ DO APP
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack screenOptions={{ headerShown: false }}>
+          {/* Agora o sistema sabe que existe uma tela separada só para o Login! */}
+          <Stack.Screen name="login" /> 
+          <Stack.Screen name="index" /> 
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+        </Stack>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

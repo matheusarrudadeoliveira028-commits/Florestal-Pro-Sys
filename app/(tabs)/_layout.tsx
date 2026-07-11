@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Drawer } from 'expo-router/drawer';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, View, useWindowDimensions } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '../../src/supabase';
 
 export default function DrawerLayout() {
@@ -33,24 +32,48 @@ export default function DrawerLayout() {
       setIsAdmin(ehAdmin);
 
       if (!ehAdmin && cargoDoUsuario) {
-        const { data, error } = await supabase.from('permissoes_menu').select('*');
-        
-        if (data) {
-          const regraDoCargo = data.find(item => item.cargo && item.cargo.toLowerCase() === cargoDoUsuario.toLowerCase());
+        try {
+          // 1. TENTA BUSCAR DA INTERNET (Supabase)
+          const { data, error } = await supabase.from('permissoes_menu').select('*');
           
-          if (regraDoCargo && regraDoCargo.telas) {
-            const regras = typeof regraDoCargo.telas === 'string' ? JSON.parse(regraDoCargo.telas) : regraDoCargo.telas;
-            setPermissoesAtivas(regras);
+          if (error) {
+             // Força a ir para o bloco Catch se houver erro (ex: offline)
+             throw new Error("Sem conexão de rede");
+          }
+
+          if (data) {
+            const regraDoCargo = data.find(item => item.cargo && item.cargo.toLowerCase() === cargoDoUsuario.toLowerCase());
+            
+            if (regraDoCargo && regraDoCargo.telas) {
+              const regras = typeof regraDoCargo.telas === 'string' ? JSON.parse(regraDoCargo.telas) : regraDoCargo.telas;
+              setPermissoesAtivas(regras);
+              
+              // 👉 SALVA AS PERMISSÕES NA "MOCHILA" (AsyncStorage) PARA O MODO OFFLINE
+              await AsyncStorage.setItem('@permissoes_menu_offline', JSON.stringify(regras));
+            } else {
+              Alert.alert(
+                "Aviso de Acesso", 
+                `Nenhuma regra de menu encontrada para o seu cargo: "${cargoDoUsuario}". \nPeça ao Administrador para configurar no Painel.`
+              );
+            }
+          }
+        } catch (networkError) {
+          // 👉 2. SE FALHAR (OFFLINE), RESGATA DA "MOCHILA" (AsyncStorage)
+          const regrasOffline = await AsyncStorage.getItem('@permissoes_menu_offline');
+          
+          if (regrasOffline) {
+            setPermissoesAtivas(JSON.parse(regrasOffline));
           } else {
-            Alert.alert(
-              "Aviso de Acesso", 
-              `Nenhuma regra de menu encontrada para o seu cargo: "${cargoDoUsuario}". \nPeça ao Administrador para configurar no Painel.`
-            );
+             // Caso seja o primeiro login do fiscal e ele já estiver offline sem nunca ter carregado o menu
+             Alert.alert(
+                "Aviso Offline", 
+                "O menu não pôde ser carregado. Conecte o tablet à internet pelo menos uma vez para baixar suas permissões."
+             );
           }
         }
       }
     } catch (e) {
-      console.log("Erro ao carregar regras de acesso do menu");
+      console.log("Erro ao carregar regras de acesso do menu", e);
     } finally {
       setCarregandoMenu(false);
     }
@@ -74,227 +97,218 @@ export default function DrawerLayout() {
     );
   }
 
+  // 👉 AQUI A MÁGICA FINAL: Retiramos o <GestureHandlerRootView> daqui
+  // e retornamos o Drawer diretamente, pois a Raiz já está cuidando dos gestos!
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <Drawer
-        screenOptions={{
-          drawerType: isTelaGrande ? 'permanent' : 'front',
-          drawerStyle: {
-            width: isTelaGrande ? 280 : 250,
-          },
-          headerStyle: { backgroundColor: '#2C3E50' },
-          headerTintColor: '#FFF',
-          headerTitleStyle: { fontWeight: 'bold' },
-          drawerActiveBackgroundColor: '#27AE60',
-          drawerActiveTintColor: '#FFF',
-          drawerInactiveTintColor: '#34495E',
-          drawerLabelStyle: { 
-            fontSize: 16, 
-            fontWeight: 'bold',
-            textTransform: 'capitalize' 
-          }
+    <Drawer
+      screenOptions={{
+        drawerType: isTelaGrande ? 'permanent' : 'front',
+        drawerStyle: {
+          width: isTelaGrande ? 280 : 250,
+        },
+        headerStyle: { backgroundColor: '#2C3E50' },
+        headerTintColor: '#FFF',
+        headerTitleStyle: { fontWeight: 'bold' },
+        drawerActiveBackgroundColor: '#27AE60',
+        drawerActiveTintColor: '#FFF',
+        drawerInactiveTintColor: '#34495E',
+        drawerLabelStyle: { 
+          fontSize: 16, 
+          fontWeight: 'bold',
+          textTransform: 'capitalize' 
+        },
+        unmountOnBlur: true // 👉 AQUI ESTÁ A TRAVA QUE MATA A TELA QUANDO O USUÁRIO SAI DELA!
+      }}
+    >
+      
+      <Drawer.Screen
+        name="index"
+        options={{
+          drawerLabel: 'Lançar Produção',
+          title: 'Início',
+          drawerIcon: ({ color, size }) => <Ionicons name="leaf" size={size} color={color} />,
         }}
-      >
-        
-        <Drawer.Screen
-          name="index"
-          options={{
-            drawerLabel: 'Lançar Produção',
-            title: 'Início',
-            drawerIcon: ({ color, size }) => <Ionicons name="leaf" size={size} color={color} />,
-          }}
-        />
+      />
 
-        <Drawer.Screen
-          name="estoque"
-          options={{
-            drawerLabel: 'Estoque / Inventário',
-            title: 'Estoque',
-            drawerIcon: ({ color, size }) => <Ionicons name="cube" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('estoque')
-          }}
-        />
+      <Drawer.Screen
+        name="estoque"
+        options={{
+          drawerLabel: 'Estoque / Inventário',
+          title: 'Estoque',
+          drawerIcon: ({ color, size }) => <Ionicons name="cube" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('estoque')
+        }}
+      />
 
-        <Drawer.Screen
-          name="carregamentos"
-          options={{
-            drawerLabel: 'Expedição / Romaneio',
-            title: 'Carregamentos',
-            drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="truck" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('carregamentos') // 👉 CORRIGIDO AQUI!
-          }}
-        />
+      <Drawer.Screen
+        name="carregamentos"
+        options={{
+          drawerLabel: 'Expedição / Romaneio',
+          title: 'Carregamentos',
+          drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="truck" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('carregamentos') 
+        }}
+      />
 
-        <Drawer.Screen
-          name="diarios"
-          options={{
-            drawerLabel: 'Diário Reserva',
-            title: 'Diário',
-            drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="book-open-page-variant" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('diarios') // 👉 CORRIGIDO AQUI!
-          }}
-        />
+      <Drawer.Screen
+        name="retroativo"
+        options={{
+          drawerLabel: 'Lançamento Retroativo',
+          title: 'Exceções',
+          drawerIcon: ({ color, size }) => <Ionicons name="time" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('retroativo') 
+        }}
+      />
 
-        <Drawer.Screen
-          name="retroativo"
-          options={{
-            drawerLabel: 'Lançamento Retroativo',
-            title: 'Exceções',
-            drawerIcon: ({ color, size }) => <Ionicons name="time" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('retroativo') // 👉 CORRIGIDO AQUI!
-          }}
-        />
+      <Drawer.Screen
+        name="mapa"
+        options={{
+          drawerLabel: 'Mapa Da Fazenda',
+          title: 'Mapa',
+          drawerIcon: ({ color, size }) => <Ionicons name="map" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('mapa')
+        }}
+      />
 
-        <Drawer.Screen
-          name="mapa"
-          options={{
-            drawerLabel: 'Mapa Da Fazenda',
-            title: 'Mapa',
-            drawerIcon: ({ color, size }) => <Ionicons name="map" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('mapa')
-          }}
-        />
+      <Drawer.Screen
+        name="auditoria"
+        options={{
+          drawerLabel: 'Auditoria De Fotos',
+          title: 'Auditoria',
+          drawerIcon: ({ color, size }) => <Ionicons name="camera" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('auditoria')
+        }}
+      />
 
-        <Drawer.Screen
-          name="auditoria"
-          options={{
-            drawerLabel: 'Auditoria De Fotos',
-            title: 'Auditoria',
-            drawerIcon: ({ color, size }) => <Ionicons name="camera" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('auditoria')
-          }}
-        />
+      <Drawer.Screen
+        name="alertas"
+        options={{
+          drawerLabel: 'Auditoria de Alertas',
+          title: 'Alertas',
+          drawerIcon: ({ color, size }) => <Ionicons name="warning" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('alertas')
+        }}
+      />
 
-        <Drawer.Screen
-          name="alertas"
-          options={{
-            drawerLabel: 'Auditoria de Alertas',
-            title: 'Alertas',
-            drawerIcon: ({ color, size }) => <Ionicons name="warning" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('alertas')
-          }}
-        />
+      <Drawer.Screen
+        name="fechamento"
+        options={{
+          drawerLabel: 'Fechamento Financeiro',
+          title: 'Financeiro',
+          drawerIcon: ({ color, size }) => <Ionicons name="cash" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('fechamento')
+        }}
+      />
 
-        <Drawer.Screen
-          name="fechamento"
-          options={{
-            drawerLabel: 'Fechamento Financeiro',
-            title: 'Financeiro',
-            drawerIcon: ({ color, size }) => <Ionicons name="cash" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('fechamento')
-          }}
-        />
+      <Drawer.Screen
+        name="usuarios"
+        options={{
+          drawerLabel: 'Gestão De Acessos',
+          title: 'Acessos',
+          drawerIcon: ({ color, size }) => <Ionicons name="people" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('usuarios')
+        }}
+      />
 
-        <Drawer.Screen
-          name="usuarios"
-          options={{
-            drawerLabel: 'Gestão De Acessos',
-            title: 'Acessos',
-            drawerIcon: ({ color, size }) => <Ionicons name="people" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('usuarios')
-          }}
-        />
+      <Drawer.Screen
+        name="estatisticas"
+        options={{
+          drawerLabel: 'Estatísticas De Produção',
+          title: 'Dashboard',
+          drawerIcon: ({ color, size }) => <Ionicons name="bar-chart" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('estatisticas')
+        }}
+      />
 
-        <Drawer.Screen
-          name="estatisticas"
-          options={{
-            drawerLabel: 'Estatísticas De Produção',
-            title: 'Dashboard',
-            drawerIcon: ({ color, size }) => <Ionicons name="bar-chart" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('estatisticas')
-          }}
-        />
+      <Drawer.Screen
+        name="ferias"
+        options={{
+          drawerLabel: 'Férias',
+          title: 'Férias',
+          drawerIcon: ({ color, size }) => <Ionicons name="airplane" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('ferias')
+        }}
+      />
 
-        <Drawer.Screen
-          name="ferias"
-          options={{
-            drawerLabel: 'Férias',
-            title: 'Férias',
-            drawerIcon: ({ color, size }) => <Ionicons name="airplane" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('ferias')
-          }}
-        />
+      <Drawer.Screen
+        name="equipes"
+        options={{
+          drawerLabel: 'Equipes',
+          title: 'Equipes',
+          drawerIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('equipes')
+        }}
+      />
 
-        <Drawer.Screen
-          name="equipes"
-          options={{
-            drawerLabel: 'Equipes',
-            title: 'Equipes',
-            drawerIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('equipes')
-          }}
-        />
+      <Drawer.Screen
+        name="suporte"
+        options={{
+          drawerLabel: 'Suporte',
+          title: 'Suporte',
+          drawerIcon: ({ color, size }) => <Ionicons name="compass" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('suporte')
+        }}
+      />
 
-        <Drawer.Screen
-          name="suporte"
-          options={{
-            drawerLabel: 'Suporte',
-            title: 'Suporte',
-            drawerIcon: ({ color, size }) => <Ionicons name="compass" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('suporte')
-          }}
-        />
+      <Drawer.Screen
+        name="ausencias"
+        options={{
+          drawerLabel: 'Ausências',
+          title: 'Ausências',
+          drawerIcon: ({ color, size }) => <Ionicons name="close-circle-outline" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('ausencias')
+        }}
+      />
 
-        <Drawer.Screen
-          name="ausencias"
-          options={{
-            drawerLabel: 'Ausências',
-            title: 'Ausências',
-            drawerIcon: ({ color, size }) => <Ionicons name="close-circle-outline" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('ausencias')
-          }}
-        />
+      <Drawer.Screen
+        name="cadastros"
+        options={{
+          drawerLabel: 'Cadastros',
+          title: 'Cadastros',
+          drawerIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('cadastros')
+        }}
+      />
 
-        <Drawer.Screen
-          name="cadastros"
-          options={{
-            drawerLabel: 'Cadastros',
-            title: 'Cadastros',
-            drawerIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('cadastros')
-          }}
-        />
+      <Drawer.Screen
+        name="relatorios"
+        options={{
+          drawerLabel: 'Relatórios',
+          title: 'Relatórios',
+          drawerIcon: ({ color, size }) => <Ionicons name="document-attach" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('relatorios')
+        }}
+      />
 
-        <Drawer.Screen
-          name="relatorios"
-          options={{
-            drawerLabel: 'Relatórios',
-            title: 'Relatórios',
-            drawerIcon: ({ color, size }) => <Ionicons name="document-attach" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('relatorios')
-          }}
-        />
+      <Drawer.Screen
+        name="colaboradores"
+        options={{
+          drawerLabel: 'Colaboradores',
+          title: 'Colaboradores',
+          drawerIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('colaboradores')
+        }}
+      />
 
-        <Drawer.Screen
-          name="colaboradores"
-          options={{
-            drawerLabel: 'Colaboradores',
-            title: 'Colaboradores',
-            drawerIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
-            drawerItemStyle: ocultarVisul('colaboradores')
-          }}
-        />
+      <Drawer.Screen
+        name="permissoes"
+        options={{
+          drawerLabel: 'Gerenciar Permissões',
+          title: 'Controle de Menu',
+          drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="shield-key" size={size} color={color} />,
+          drawerItemStyle: isAdmin ? {} : { display: 'none' } 
+        }}
+      />
 
-        <Drawer.Screen
-          name="permissoes"
-          options={{
-            drawerLabel: 'Gerenciar Permissões',
-            title: 'Controle de Menu',
-            drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="shield-key" size={size} color={color} />,
-            drawerItemStyle: isAdmin ? {} : { display: 'none' } 
-          }}
-        />
+      <Drawer.Screen
+        name="configuracoes"
+        options={{
+          drawerLabel: 'Configurações / Sair',
+          title: 'Ajustes',
+          drawerIcon: ({ color, size }) => <Ionicons name="settings" size={size} color={color} />,
+        }}
+      />
 
-        <Drawer.Screen
-          name="configuracoes"
-          options={{
-            drawerLabel: 'Configurações / Sair',
-            title: 'Ajustes',
-            drawerIcon: ({ color, size }) => <Ionicons name="settings" size={size} color={color} />,
-          }}
-        />
-
-      </Drawer>
-    </GestureHandlerRootView>
+    </Drawer>
   );
 }

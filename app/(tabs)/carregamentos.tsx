@@ -1,14 +1,56 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import * as Print from 'expo-print';
+import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, InteractionManager, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
+// =========================================================================
+// COMPONENTE MEMOIZADO: ITEM DO RELATÓRIO
+// =========================================================================
+const ItemRelatorioCard = memo(({ romaneio, isAdmin, onEditar }: any) => {
+  const mediaCalculada = romaneio.totalPeso > 0 ? (romaneio.totalPeso / romaneio.totalQtd).toFixed(2).replace('.', ',') : '-';
+  
+  return (
+    <View style={styles.itemRelatorio}>
+      <View style={{flex: 1}}>
+        <Text style={{fontWeight: 'bold', color: '#2C3E50', fontSize: 15}}>Romaneio: {romaneio.numero_romaneio}</Text>
+        <Text style={{fontSize: 12, color: '#7F8C8D', marginBottom: 5}}>Data: {romaneio.data_saida.split('-').reverse().join('/')}</Text>
+        
+        <View style={styles.lotesResumo}>
+          {romaneio.itens.map((i: any, index: number) => (
+            <Text key={index} style={{fontSize: 11, color: '#34495E'}}>• {i.quantidade}x {i.variedade} ({i.fazenda})</Text>
+          ))}
+        </View>
+
+        <Text style={{fontSize: 13, color: romaneio.totalPeso > 0 ? '#27AE60' : '#E67E22', fontWeight: 'bold', marginTop: 5}}>
+          Total: {romaneio.totalQtd} Tb | Peso: {romaneio.totalPeso > 0 ? `${romaneio.totalPeso.toFixed(2).replace('.', ',')} Kg` : 'Pendente'}
+        </Text>
+        {romaneio.totalPeso > 0 && <Text style={{fontSize: 11, color: '#27AE60'}}>Média: {mediaCalculada} Kg/Tb</Text>}
+      </View>
+      
+      {isAdmin && (
+        <TouchableOpacity style={styles.btnEditarPequeno} onPress={() => onEditar(romaneio)}>
+          <Text style={{color: '#FFF', fontSize: 13, fontWeight: 'bold', textAlign: 'center'}}>✏️ Pesar / Editar</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+});
+
+// =========================================================================
+// TELA PRINCIPAL
+// =========================================================================
 export default function CarregamentosScreen() {
   const [abaAtiva, setAbaAtiva] = useState<'novo' | 'relatorio'>('novo');
 
-  // === ESTADOS DO CABEÇALHO DO ROMANEIO ===
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [carregamentosPendentes, setCarregamentosPendentes] = useState<any[]>([]);
+  const [sincronizando, setSincronizando] = useState(false);
+
   const [romaneioEditando, setRomaneioEditando] = useState<string | null>(null);
   const [dataSaida, setDataSaida] = useState('');
   const [numeroRomaneio, setNumeroRomaneio] = useState('');
@@ -17,27 +59,33 @@ export default function CarregamentosScreen() {
   const [pesoLiquidoTotal, setPesoLiquidoTotal] = useState('');
   const [mediaGeral, setMediaGeral] = useState('0,00');
 
-  // === ESTADOS DO ITEM (LOTE) ===
   const [itemFazenda, setItemFazenda] = useState('');
   const [itemVariedade, setItemVariedade] = useState('Elliotti');
   const [itemQuantidade, setItemQuantidade] = useState('');
   
-  // Lista de itens no "carrinho" da carga atual
   const [itensCarga, setItensCarga] = useState<any[]>([]);
-
   const [listaFazendas, setListaFazendas] = useState<string[]>([]);
   const [salvando, setSalvando] = useState(false);
 
-  // === ESTADOS DO RELATÓRIO ===
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [listaRelatorioAgrupada, setListaRelatorioAgrupada] = useState<any[]>([]);
   const [buscando, setBuscando] = useState(false);
   const [gerandoPDF, setGerandoPDF] = useState(false);
 
+  // 👉 InteractionManager APLICADO AQUI
+  useFocusEffect(
+    useCallback(() => {
+      const tarefa = InteractionManager.runAfterInteractions(() => {
+        verificarPerfil();
+        carregarFazendas();
+        carregarFilaOffline();
+      });
+      return () => tarefa.cancel();
+    }, [])
+  );
+
   useEffect(() => {
-    carregarFazendas();
-    
     const hoje = new Date();
     setDataSaida(hoje.toLocaleDateString('pt-BR'));
     
@@ -47,12 +95,10 @@ export default function CarregamentosScreen() {
     setDataFim(ultimoDia.toLocaleDateString('pt-BR'));
   }, []);
 
-  // Calcula a média automaticamente quando o "carrinho" ou o Peso mudam
   const totalTamboresCarga = itensCarga.reduce((acc, curr) => acc + parseInt(curr.quantidade || '0'), 0);
 
   useEffect(() => {
     const pesoNum = parseFloat(pesoLiquidoTotal.replace(',', '.')) || 0;
-    
     if (totalTamboresCarga > 0 && pesoNum > 0) {
       const media = pesoNum / totalTamboresCarga;
       setMediaGeral(media.toFixed(2).replace('.', ','));
@@ -61,11 +107,41 @@ export default function CarregamentosScreen() {
     }
   }, [itensCarga, pesoLiquidoTotal]);
 
+  const verificarPerfil = async () => {
+    try {
+      const perfilSalvo = await AsyncStorage.getItem('@perfil_offline');
+      if (perfilSalvo) {
+        const perfil = JSON.parse(perfilSalvo);
+        const cargo = perfil.cargo ? perfil.cargo.trim().toLowerCase() : '';
+        setIsAdmin(cargo === 'administrador');
+      }
+    } catch (e) {
+      setIsAdmin(false);
+    }
+  };
+
+  const carregarFilaOffline = async () => {
+    try {
+      const dados = await AsyncStorage.getItem('@carregamentos_off');
+      if (dados) setCarregamentosPendentes(JSON.parse(dados));
+    } catch (e) { console.log(e); }
+  };
+
   const carregarFazendas = async () => {
-    const { data } = await supabase.from('mapa_fazendas').select('fazenda');
-    if (data) {
-      const unicas = [...new Set(data.map(item => item.fazenda))] as string[];
-      setListaFazendas(unicas);
+    try {
+      const { data, error } = await supabase.from('mapa_fazendas').select('fazenda');
+      if (error) throw new Error("Offline");
+      
+      if (data) {
+        const unicas = [...new Set(data.map(item => item.fazenda))] as string[];
+        setListaFazendas(unicas);
+        await AsyncStorage.setItem('@mochila_fazendas_simples', JSON.stringify(unicas));
+      }
+      setIsOffline(false);
+    } catch (e) {
+      setIsOffline(true);
+      const fazOffline = await AsyncStorage.getItem('@mochila_fazendas_simples');
+      if (fazOffline) setListaFazendas(JSON.parse(fazOffline));
     }
   };
 
@@ -83,7 +159,6 @@ export default function CarregamentosScreen() {
     return null;
   };
 
-  // 👉 LÓGICA DO CARRINHO (ADICIONAR E REMOVER)
   const adicionarItem = () => {
     if (!itemFazenda || !itemQuantidade) {
       return Alert.alert("Aviso", "Selecione a Fazenda e a Quantidade do lote!");
@@ -96,7 +171,6 @@ export default function CarregamentosScreen() {
       quantidade: itemQuantidade 
     }]);
 
-    // Limpa só os campos do lote para facilitar o próximo
     setItemFazenda('');
     setItemQuantidade('');
   };
@@ -112,12 +186,15 @@ export default function CarregamentosScreen() {
     const dataBd = converterDataBanco(dataSaida);
     if (!dataBd) return Alert.alert("Aviso", "Data inválida.");
 
+    if (romaneioEditando && isOffline) {
+      return Alert.alert("Aviso Offline", "Não é possível editar/pesar um romaneio existente enquanto estiver sem internet.");
+    }
+
     setSalvando(true);
 
     const pesoNum = pesoLiquidoTotal ? parseFloat(pesoLiquidoTotal.replace(',', '.')) : 0;
     const mediaCalculada = pesoNum > 0 && totalTamboresCarga > 0 ? pesoNum / totalTamboresCarga : null;
 
-    // Monta o array com todas as linhas para salvar de uma vez
     const payloadMultiplo = itensCarga.map(item => {
       const qtdLote = parseInt(item.quantidade);
       return {
@@ -128,34 +205,63 @@ export default function CarregamentosScreen() {
         fazenda: item.fazenda,
         variedade: item.variedade,
         quantidade: qtdLote,
-        // Distribui o peso proporcionalmente para o banco ficar perfeito
         peso_liquido: mediaCalculada ? mediaCalculada * qtdLote : null,
         media_tambor: mediaCalculada
       };
     });
 
     try {
-      // Se estiver editando, exclui as linhas antigas desse romaneio antes de inserir as novas
-      if (romaneioEditando) {
-        await supabase.from('carregamentos').delete().eq('numero_romaneio', romaneioEditando);
-      }
+      const novoPendente = {
+        id_fila: Date.now().toString(),
+        isEdit: !!romaneioEditando,
+        romaneioOriginal: romaneioEditando,
+        payload: payloadMultiplo
+      };
 
-      const { error } = await supabase.from('carregamentos').insert(payloadMultiplo);
-      
-      if (error) throw error;
+      const novaLista = [...carregamentosPendentes, novoPendente];
+      await AsyncStorage.setItem('@carregamentos_off', JSON.stringify(novaLista));
+      setCarregamentosPendentes(novaLista);
 
-      Alert.alert("Sucesso", romaneioEditando ? "Carga atualizada com sucesso!" : "Nota de Romaneio salva com sucesso!", [
-        { text: "Ver PDF", onPress: () => gerarPdfRomaneio(payloadMultiplo) },
-        { text: "OK", style: "cancel" }
-      ]);
+      Alert.alert(
+        "Sucesso", 
+        romaneioEditando ? "Carga atualizada (adicionada à fila)!" : "Nota de Romaneio salva na fila!", 
+        [
+          { text: "Ver PDF", onPress: () => gerarPdfRomaneio(payloadMultiplo) },
+          { text: "OK", style: "cancel" }
+        ]
+      );
       
       limparFormulario();
-      if (romaneioEditando) buscarRelatorio();
-
     } catch (error) {
-      Alert.alert("Erro", "Falha ao salvar carregamento.");
+      Alert.alert("Erro", "Falha ao salvar carregamento no celular.");
     } finally {
       setSalvando(false);
+    }
+  };
+
+  const sincronizarComBanco = async () => {
+    if (carregamentosPendentes.length === 0) return;
+    setSincronizando(true);
+
+    try {
+      for (const item of carregamentosPendentes) {
+        if (item.isEdit && item.romaneioOriginal) {
+          await supabase.from('carregamentos').delete().eq('numero_romaneio', item.romaneioOriginal);
+        }
+        const { error } = await supabase.from('carregamentos').insert(item.payload);
+        if (error) throw new Error(error.message);
+      }
+      
+      await AsyncStorage.removeItem('@carregamentos_off');
+      setCarregamentosPendentes([]);
+      Alert.alert("🚀 Sucesso!", "Todos os romaneios foram enviados para a nuvem.");
+      
+      if (abaAtiva === 'relatorio') buscarRelatorio();
+
+    } catch (e: any) {
+      Alert.alert("Erro na Sincronização", "A internet falhou: " + e.message);
+    } finally {
+      setSincronizando(false);
     }
   };
 
@@ -167,14 +273,13 @@ export default function CarregamentosScreen() {
     setPesoLiquidoTotal('');
   };
 
-  const editarCarga = (romaneioAgrupado: any) => {
+  const editarCarga = useCallback((romaneioAgrupado: any) => {
     setRomaneioEditando(romaneioAgrupado.numero_romaneio);
     setDataSaida(romaneioAgrupado.data_saida.split('-').reverse().join('/'));
     setNumeroRomaneio(romaneioAgrupado.numero_romaneio);
     setProcedenciaTipo(romaneioAgrupado.procedencia_tipo);
     setProcedenciaNome(romaneioAgrupado.procedencia_nome || '');
     
-    // Remonta o carrinho
     const carrinhoRecriado = romaneioAgrupado.itens.map((i: any, index: number) => ({
       id_temp: index.toString(),
       fazenda: i.fazenda,
@@ -186,7 +291,7 @@ export default function CarregamentosScreen() {
     setPesoLiquidoTotal(romaneioAgrupado.totalPeso > 0 ? romaneioAgrupado.totalPeso.toFixed(2).replace('.', ',') : '');
     
     setAbaAtiva('novo');
-  };
+  }, []);
 
   const gerarPdfRomaneio = async (linhas: any[]) => {
     if (linhas.length === 0) return;
@@ -254,7 +359,7 @@ export default function CarregamentosScreen() {
           </div>
 
           <div class="signature"><hr><p><strong>Assinatura do Responsável (Expedição)</strong></p></div>
-          <div class="footer">Documento gerado automaticamente pelo Sistema Brekaz Produção.</div>
+          <div class="footer">Documento gerado automaticamente pelo Sistema Resinas Abud.</div>
         </body>
       </html>
     `;
@@ -274,6 +379,7 @@ export default function CarregamentosScreen() {
     const dtFim = converterDataBanco(dataFim);
 
     if (!dtIn || !dtFim) return Alert.alert("Aviso", "Datas inválidas.");
+    if (isOffline) return Alert.alert("Aviso", "É necessário internet para consultar os relatórios antigos.");
 
     setBuscando(true);
     const { data, error } = await supabase
@@ -286,7 +392,6 @@ export default function CarregamentosScreen() {
     if (error) {
       Alert.alert("Erro", "Falha na busca.");
     } else if (data) {
-      // 👉 LÓGICA DE AGRUPAMENTO (Junta todas as linhas com o mesmo romaneio)
       const agrupado = data.reduce((acc: any, curr: any) => {
         const chave = curr.numero_romaneio;
         if (!acc[chave]) {
@@ -388,198 +493,205 @@ export default function CarregamentosScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Expedição 🚛</Text>
-        <Text style={styles.subtitle}>Gestão de Cargas Múltiplas</Text>
-      </View>
-
-      <View style={styles.menuAbas}>
-        <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'novo' && styles.abaAtiva]} onPress={() => setAbaAtiva('novo')}>
-          <Text style={[styles.abaTexto, abaAtiva === 'novo' && styles.abaTextoAtivo]}>
-            {romaneioEditando ? '✏️ Editando Carga' : 'Novo Carregamento'}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'relatorio' && styles.abaAtiva]} onPress={() => setAbaAtiva('relatorio')}>
-          <Text style={[styles.abaTexto, abaAtiva === 'relatorio' && styles.abaTextoAtivo]}>Relatório de Saídas</Text>
-        </TouchableOpacity>
-      </View>
-
-      {abaAtiva === 'novo' && (
-        <View style={styles.card}>
-          <Text style={styles.formTitle}>1. Cabeçalho do Romaneio</Text>
-          
-          <View style={styles.row}>
-            <View style={styles.col}>
-              <Text style={styles.label}>Data Saída:</Text>
-              <TextInput style={styles.input} value={dataSaida} onChangeText={t => setDataSaida(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
-            </View>
-            <View style={styles.col}>
-              <Text style={styles.label}>Nº Romaneio:</Text>
-              <TextInput style={[styles.input, romaneioEditando ? {backgroundColor: '#EAEDED'} : null]} value={numeroRomaneio} onChangeText={setNumeroRomaneio} placeholder="Ex: 001452" editable={!romaneioEditando} />
-            </View>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }} keyboardShouldPersistTaps="handled">
+        
+        {isOffline && (
+          <View style={styles.offlineBadge}>
+            <Text style={styles.offlineText}>⚠️ MODO OFFLINE ATIVADO - Lançamentos salvos no celular.</Text>
           </View>
+        )}
 
-          <Text style={styles.label}>Procedência Geral:</Text>
-          <View style={styles.pickerContainer}>
-            <Picker selectedValue={procedenciaTipo} onValueChange={setProcedenciaTipo} style={styles.picker}>
-              <Picker.Item label="Produção Própria" value="Produção Própria" />
-              <Picker.Item label="Parceiro Extrator Especificado" value="Parceiro Extrator" />
-            </Picker>
-          </View>
-          {procedenciaTipo === 'Parceiro Extrator' && (
-            <View style={{marginBottom: 10}}>
-              <TextInput style={styles.input} value={procedenciaNome} onChangeText={setProcedenciaNome} placeholder="Nome do Parceiro" />
-            </View>
-          )}
+        <View style={styles.header}>
+          <Text style={styles.title}>Expedição 🚛</Text>
+          <Text style={styles.subtitle}>Gestão de Cargas Múltiplas</Text>
+        </View>
 
-          {/* 👉 SEÇÃO DE LOTES NO CARRINHO */}
-          <View style={styles.caixaLotes}>
-            <Text style={styles.formTitle}>2. Adicionar Lotes à Carga</Text>
+        <View style={styles.menuAbas}>
+          <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'novo' && styles.abaAtiva]} onPress={() => setAbaAtiva('novo')}>
+            <Text style={[styles.abaTexto, abaAtiva === 'novo' && styles.abaTextoAtivo]}>
+              {romaneioEditando ? '✏️ Editando Carga' : 'Novo Carregamento'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'relatorio' && styles.abaAtiva]} onPress={() => setAbaAtiva('relatorio')}>
+            <Text style={[styles.abaTexto, abaAtiva === 'relatorio' && styles.abaTextoAtivo]}>Relatório de Saídas</Text>
+          </TouchableOpacity>
+        </View>
+
+        {abaAtiva === 'novo' && (
+          <View style={styles.card}>
+            
+            {carregamentosPendentes.length > 0 && (
+              <View style={styles.syncCard}>
+                <Text style={styles.syncTexto}>📦 {carregamentosPendentes.length} romaneio(s) aguardando envio</Text>
+                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando}>
+                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={styles.btnSyncTexto}>🚀 ENVIAR PARA NUVEM</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <Text style={styles.formTitle}>1. Cabeçalho do Romaneio</Text>
             
             <View style={styles.row}>
               <View style={styles.col}>
-                <Text style={styles.label}>Fazenda:</Text>
-                <View style={styles.pickerContainer}>
-                  <Picker selectedValue={itemFazenda} onValueChange={setItemFazenda} style={styles.picker}>
-                    <Picker.Item label="..." value="" />
-                    {listaFazendas.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
-                  </Picker>
-                </View>
+                <Text style={styles.label}>Data Saída:</Text>
+                <TextInput style={styles.input} value={dataSaida} onChangeText={t => setDataSaida(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
               </View>
               <View style={styles.col}>
-                <Text style={styles.label}>Variedade:</Text>
-                <View style={styles.pickerContainer}>
-                  <Picker selectedValue={itemVariedade} onValueChange={setItemVariedade} style={styles.picker}>
-                    <Picker.Item label="Elliotti" value="Elliotti" />
-                    <Picker.Item label="Tropical" value="Tropical" />
-                    <Picker.Item label="Híbrido" value="Híbrido" />
-                  </Picker>
+                <Text style={styles.label}>Nº Romaneio:</Text>
+                <TextInput style={[styles.input, romaneioEditando ? {backgroundColor: '#EAEDED'} : null]} value={numeroRomaneio} onChangeText={setNumeroRomaneio} placeholder="Ex: 001452" editable={!romaneioEditando} />
+              </View>
+            </View>
+
+            <Text style={styles.label}>Procedência Geral:</Text>
+            <View style={styles.pickerContainer}>
+              <Picker selectedValue={procedenciaTipo} onValueChange={setProcedenciaTipo} style={styles.picker}>
+                <Picker.Item label="Produção Própria" value="Produção Própria" />
+                <Picker.Item label="Parceiro Extrator Especificado" value="Parceiro Extrator" />
+              </Picker>
+            </View>
+            {procedenciaTipo === 'Parceiro Extrator' && (
+              <View style={{marginBottom: 10}}>
+                <TextInput style={styles.input} value={procedenciaNome} onChangeText={setProcedenciaNome} placeholder="Nome do Parceiro" />
+              </View>
+            )}
+
+            <View style={styles.caixaLotes}>
+              <Text style={styles.formTitle}>2. Adicionar Lotes à Carga</Text>
+              
+              <View style={styles.row}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Fazenda:</Text>
+                  <View style={styles.pickerContainer}>
+                    <Picker selectedValue={itemFazenda} onValueChange={setItemFazenda} style={styles.picker}>
+                      <Picker.Item label="..." value="" />
+                      {listaFazendas.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
+                    </Picker>
+                  </View>
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Variedade:</Text>
+                  <View style={styles.pickerContainer}>
+                    <Picker selectedValue={itemVariedade} onValueChange={setItemVariedade} style={styles.picker}>
+                      <Picker.Item label="Elliotti" value="Elliotti" />
+                      <Picker.Item label="Tropical" value="Tropical" />
+                      <Picker.Item label="Híbrido" value="Híbrido" />
+                    </Picker>
+                  </View>
                 </View>
               </View>
+
+              <View style={styles.row}>
+                <View style={{width: '60%'}}>
+                  <Text style={styles.label}>Qtd Tambores:</Text>
+                  <TextInput style={styles.input} value={itemQuantidade} onChangeText={setItemQuantidade} keyboardType="numeric" placeholder="Ex: 20" />
+                </View>
+                <View style={{width: '35%', justifyContent: 'center', paddingTop: 5}}>
+                  <TouchableOpacity style={styles.btnAdicionarLote} onPress={adicionarItem}>
+                    <Text style={{color: '#FFF', fontWeight: 'bold'}}>➕ Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {itensCarga.length > 0 && (
+                <View style={styles.listaCarrinho}>
+                  <Text style={{fontWeight: 'bold', color: '#2C3E50', marginBottom: 5}}>Itens na Carga:</Text>
+                  {itensCarga.map((item) => (
+                    <View key={item.id_temp} style={styles.loteItem}>
+                      <Text style={{flex: 1, color: '#34495E'}}>📦 {item.quantidade}x {item.variedade} ({item.fazenda})</Text>
+                      <TouchableOpacity onPress={() => removerItem(item.id_temp)}>
+                        <Text style={{color: '#E74C3C', fontWeight: 'bold', padding: 5}}>X</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
 
+            <Text style={styles.formTitle}>3. Totais e Pesagem Oficial</Text>
             <View style={styles.row}>
-              <View style={{width: '60%'}}>
-                <Text style={styles.label}>Qtd Tambores:</Text>
-                <TextInput style={styles.input} value={itemQuantidade} onChangeText={setItemQuantidade} keyboardType="numeric" placeholder="Ex: 20" />
+              <View style={styles.col}>
+                <Text style={styles.label}>Total de Tambores:</Text>
+                <TextInput style={[styles.input, {backgroundColor: '#EAEDED', fontWeight: 'bold'}]} value={totalTamboresCarga.toString()} editable={false} />
               </View>
-              <View style={{width: '35%', justifyContent: 'center', paddingTop: 5}}>
-                <TouchableOpacity style={styles.btnAdicionarLote} onPress={adicionarItem}>
-                  <Text style={{color: '#FFF', fontWeight: 'bold'}}>➕ Add</Text>
-                </TouchableOpacity>
+              <View style={styles.col}>
+                <Text style={styles.label}>Peso Líq. Total (Kg):</Text>
+                <TextInput style={styles.input} value={pesoLiquidoTotal} onChangeText={setPesoLiquidoTotal} keyboardType="numeric" placeholder="Opcional agora" />
               </View>
             </View>
 
-            {/* LISTA DE LOTES ADICIONADOS */}
-            {itensCarga.length > 0 && (
-              <View style={styles.listaCarrinho}>
-                <Text style={{fontWeight: 'bold', color: '#2C3E50', marginBottom: 5}}>Itens na Carga:</Text>
-                {itensCarga.map((item) => (
-                  <View key={item.id_temp} style={styles.loteItem}>
-                    <Text style={{flex: 1, color: '#34495E'}}>📦 {item.quantidade}x {item.variedade} ({item.fazenda})</Text>
-                    <TouchableOpacity onPress={() => removerItem(item.id_temp)}>
-                      <Text style={{color: '#E74C3C', fontWeight: 'bold', padding: 5}}>X</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
+            <View style={styles.caixaMedia}>
+              <Text style={styles.mediaTexto}>Média Geral da Carga:</Text>
+              <Text style={styles.mediaValor}>{mediaGeral} Kg/Tb</Text>
+            </View>
+
+            <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarCarregamento} disabled={salvando}>
+              {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>{romaneioEditando ? '💾 Atualizar Romaneio (Fila)' : '📄 Salvar na Fila e Gerar PDF'}</Text>}
+            </TouchableOpacity>
+
+            {romaneioEditando && (
+              <TouchableOpacity style={styles.btnCancelarEdicao} onPress={limparFormulario}>
+                <Text style={styles.btnCancelarTexto}>Cancelar Edição</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {abaAtiva === 'relatorio' && (
+          <View style={styles.card}>
+            <Text style={styles.formTitle}>Filtro de Relatório</Text>
+            <View style={styles.row}>
+              <View style={styles.col}>
+                <Text style={styles.label}>Data Inicial:</Text>
+                <TextInput style={styles.input} value={dataInicio} onChangeText={t => setDataInicio(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>Data Final:</Text>
+                <TextInput style={styles.input} value={dataFim} onChangeText={t => setDataFim(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.btnBuscar} onPress={buscarRelatorio} disabled={buscando}>
+              {buscando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>🔍 Buscar Saídas</Text>}
+            </TouchableOpacity>
+
+            {listaRelatorioAgrupada.length > 0 && (
+              <View style={{marginTop: 20}}>
+                <Text style={styles.formTitle}>Romaneios Encontrados ({listaRelatorioAgrupada.length})</Text>
+                
+                <FlatList
+                  data={listaRelatorioAgrupada}
+                  keyExtractor={(item) => item.numero_romaneio}
+                  initialNumToRender={10}
+                  maxToRenderPerBatch={10}
+                  windowSize={5}
+                  renderItem={({ item }) => (
+                     <ItemRelatorioCard 
+                        romaneio={item} 
+                        isAdmin={isAdmin} 
+                        onEditar={editarCarga} 
+                     />
+                  )}
+                  scrollEnabled={false} 
+                />
+
+                <TouchableOpacity style={styles.btnGerarPdf} onPress={gerarPdfRelatorio} disabled={gerandoPDF}>
+                  {gerandoPDF ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>🖨️ Gerar Relatório (PDF)</Text>}
+                </TouchableOpacity>
               </View>
             )}
           </View>
-
-          <Text style={styles.formTitle}>3. Totais e Pesagem Oficial</Text>
-          <View style={styles.row}>
-            <View style={styles.col}>
-              <Text style={styles.label}>Total de Tambores:</Text>
-              <TextInput style={[styles.input, {backgroundColor: '#EAEDED', fontWeight: 'bold'}]} value={totalTamboresCarga.toString()} editable={false} />
-            </View>
-            <View style={styles.col}>
-              <Text style={styles.label}>Peso Líq. Total (Kg):</Text>
-              <TextInput style={styles.input} value={pesoLiquidoTotal} onChangeText={setPesoLiquidoTotal} keyboardType="numeric" placeholder="Opcional agora" />
-            </View>
-          </View>
-
-          <View style={styles.caixaMedia}>
-            <Text style={styles.mediaTexto}>Média Geral da Carga:</Text>
-            <Text style={styles.mediaValor}>{mediaGeral} Kg/Tb</Text>
-          </View>
-
-          <TouchableOpacity style={[styles.button, salvando && styles.buttonDisabled]} onPress={salvarCarregamento} disabled={salvando}>
-            {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>{romaneioEditando ? '💾 Atualizar Romaneio' : '📄 Salvar e Gerar Romaneio'}</Text>}
-          </TouchableOpacity>
-
-          {romaneioEditando && (
-            <TouchableOpacity style={styles.btnCancelarEdicao} onPress={limparFormulario}>
-              <Text style={styles.btnCancelarTexto}>Cancelar Edição</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
-      {abaAtiva === 'relatorio' && (
-        <View style={styles.card}>
-          <Text style={styles.formTitle}>Filtro de Relatório</Text>
-          <View style={styles.row}>
-            <View style={styles.col}>
-              <Text style={styles.label}>Data Inicial:</Text>
-              <TextInput style={styles.input} value={dataInicio} onChangeText={t => setDataInicio(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
-            </View>
-            <View style={styles.col}>
-              <Text style={styles.label}>Data Final:</Text>
-              <TextInput style={styles.input} value={dataFim} onChangeText={t => setDataFim(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
-            </View>
-          </View>
-
-          <TouchableOpacity style={styles.btnBuscar} onPress={buscarRelatorio} disabled={buscando}>
-            {buscando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>🔍 Buscar Saídas</Text>}
-          </TouchableOpacity>
-
-          {listaRelatorioAgrupada.length > 0 && (
-            <View style={{marginTop: 20}}>
-              <Text style={styles.formTitle}>Romaneios Encontrados ({listaRelatorioAgrupada.length})</Text>
-              
-              {listaRelatorioAgrupada.map((romaneio, idx) => {
-                const mediaCalculada = romaneio.totalPeso > 0 ? (romaneio.totalPeso / romaneio.totalQtd).toFixed(2).replace('.', ',') : '-';
-                
-                return (
-                  <View key={idx} style={styles.itemRelatorio}>
-                    <View style={{flex: 1}}>
-                      <Text style={{fontWeight: 'bold', color: '#2C3E50', fontSize: 15}}>Romaneio: {romaneio.numero_romaneio}</Text>
-                      <Text style={{fontSize: 12, color: '#7F8C8D', marginBottom: 5}}>Data: {romaneio.data_saida.split('-').reverse().join('/')}</Text>
-                      
-                      <View style={styles.lotesResumo}>
-                        {romaneio.itens.map((i: any, index: number) => (
-                          <Text key={index} style={{fontSize: 11, color: '#34495E'}}>• {i.quantidade}x {i.variedade} ({i.fazenda})</Text>
-                        ))}
-                      </View>
-
-                      <Text style={{fontSize: 13, color: romaneio.totalPeso > 0 ? '#27AE60' : '#E67E22', fontWeight: 'bold', marginTop: 5}}>
-                        Total: {romaneio.totalQtd} Tb | Peso: {romaneio.totalPeso > 0 ? `${romaneio.totalPeso.toFixed(2).replace('.', ',')} Kg` : 'Pendente'}
-                      </Text>
-                      {romaneio.totalPeso > 0 && <Text style={{fontSize: 11, color: '#27AE60'}}>Média: {mediaCalculada} Kg/Tb</Text>}
-                    </View>
-                    
-                    <TouchableOpacity style={styles.btnEditarPequeno} onPress={() => editarCarga(romaneio)}>
-                      <Text style={{color: '#FFF', fontSize: 13, fontWeight: 'bold', textAlign: 'center'}}>✏️ Pesar / Editar</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-
-              <TouchableOpacity style={styles.btnGerarPdf} onPress={gerarPdfRelatorio} disabled={gerandoPDF}>
-                {gerandoPDF ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>🖨️ Gerar Relatório (PDF)</Text>}
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      )}
-    </ScrollView>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F7FA', padding: 20 },
-  header: { marginBottom: 20, marginTop: 20, alignItems: 'center' },
+  offlineBadge: { backgroundColor: '#E74C3C', padding: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 10, borderRadius: 5 },
+  offlineText: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
+  header: { marginBottom: 20, marginTop: 10, alignItems: 'center' },
   title: { fontSize: 28, fontWeight: 'bold', color: '#2C3E50' },
   subtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
   menuAbas: { flexDirection: 'row', backgroundColor: '#E0E6ED', borderRadius: 10, padding: 4, marginBottom: 20 },
@@ -609,6 +721,10 @@ const styles = StyleSheet.create({
   btnGerarPdf: { backgroundColor: '#E67E22', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 15 },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  syncCard: { backgroundColor: '#F39C12', padding: 15, borderRadius: 12, marginBottom: 20, alignItems: 'center' },
+  syncTexto: { color: '#FFF', fontWeight: 'bold', marginBottom: 10 },
+  btnSync: { backgroundColor: '#FFF', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 8, alignItems: 'center', width: '100%' },
+  btnSyncTexto: { color: '#F39C12', fontWeight: 'bold', fontSize: 12 },
   itemRelatorio: { flexDirection: 'row', backgroundColor: '#FFF', padding: 15, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: '#BDC3C7', alignItems: 'center', elevation: 2 },
   lotesResumo: { backgroundColor: '#F8FAFC', padding: 5, borderRadius: 5, marginVertical: 5 },
   btnEditarPequeno: { backgroundColor: '#F39C12', paddingHorizontal: 12, paddingVertical: 12, borderRadius: 8, marginLeft: 10, width: 80, justifyContent: 'center' }

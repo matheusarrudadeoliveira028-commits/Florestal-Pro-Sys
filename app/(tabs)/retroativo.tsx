@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import { router, useFocusEffect } from 'expo-router';
 import React, { memo, useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, InteractionManager, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
 // =========================================================================
@@ -71,17 +71,21 @@ export default function RetroativoScreen() {
   const [indexEdicao, setIndexEdicao] = useState<number | null>(null);
   const [dataOriginalEdicao, setDataOriginalEdicao] = useState<string | null>(null);
 
+  // 👉 MELHORIA 1: InteractionManager PARA NÃO TRAVAR O MENU
   useFocusEffect(
     useCallback(() => {
-      carregarUsuarioLogado(); 
-      carregarLancamentosLocais(); 
-      
-      if (indexEdicao === null) {
-        const hoje = new Date();
-        setDataRetroativa(hoje.toLocaleDateString('pt-BR'));
-        setHoraRetroativa(hoje.toLocaleTimeString('pt-BR').substring(0, 5));
-      }
-    }, [])
+      const tarefa = InteractionManager.runAfterInteractions(() => {
+        carregarUsuarioLogado(); 
+        carregarLancamentosLocais(); 
+        
+        if (indexEdicao === null) {
+          const hoje = new Date();
+          setDataRetroativa(hoje.toLocaleDateString('pt-BR'));
+          setHoraRetroativa(hoje.toLocaleTimeString('pt-BR').substring(0, 5));
+        }
+      });
+      return () => tarefa.cancel();
+    }, [indexEdicao])
   );
 
   const carregarUsuarioLogado = async () => {
@@ -125,7 +129,9 @@ export default function RetroativoScreen() {
     try {
       const { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
       const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
-      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
+      
+      // 👉 MELHORIA 2: BUSCA OTIMIZADA PARA NÃO ESTOURAR A MEMÓRIA
+      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes, data_bloqueio');
 
       if (errColab || errServ || errMapa) throw new Error("Sem rede");
 
@@ -200,9 +206,12 @@ export default function RetroativoScreen() {
   }, [servicoSelecionadoCompleto, quantidade]);
 
   const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
+  
+  // 👉 MELHORIA 3: LÓGICA DE MÚLTIPLOS RAMAIS INVISÍVEL (OBEDECE AO ADMIN)
+  const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
   const toggleRamal = (ramalStr: string) => {
-    if (isColeta) {
+    if (permiteMultiplosRamais) {
       if (ramaisSelecionados.includes(ramalStr)) {
         setRamaisSelecionados(ramaisSelecionados.filter(r => r !== ramalStr));
       } else {
@@ -221,7 +230,7 @@ export default function RetroativoScreen() {
   const handleMudancaQuantidade = (texto: string) => {
     const valorDigitado = parseInt(texto) || 0;
     
-    if (!isColeta && limitePes !== null && valorDigitado > limitePes) {
+    if (!permiteMultiplosRamais && limitePes !== null && valorDigitado > limitePes) {
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{
           colaborador: colaborador || 'Não Selecionado',
@@ -262,8 +271,21 @@ export default function RetroativoScreen() {
     setColaborador(item.colaborador);
     setFazenda(item.fazenda);
     setQuadra(item.quadra);
-    setServico(item.servico);
-    setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === item.servico) || null);
+    
+    let nomePuroServico = item.servico;
+    if (item.servico.includes(' - HÍBRIDO')) {
+      nomePuroServico = item.servico.replace(' - HÍBRIDO', '');
+      setTipoResina('HÍBRIDO');
+    } else if (item.servico.includes(' - TROPICAL')) {
+      nomePuroServico = item.servico.replace(' - TROPICAL', '');
+      setTipoResina('TROPICAL');
+    } else if (item.servico.includes(' - ELLIOTTI')) {
+      nomePuroServico = item.servico.replace(' - ELLIOTTI', '');
+      setTipoResina('ELLIOTTI');
+    }
+
+    setServico(nomePuroServico);
+    setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === nomePuroServico) || null);
     
     setTipoResina(item.tipo_resina || 'ELLIOTTI');
     setRamaisSelecionados(String(item.ramal).split(', '));
@@ -316,7 +338,7 @@ export default function RetroativoScreen() {
       }
     }
 
-    if (!isColeta && limitePes !== null && parseInt(quantidade) > limitePes) {
+    if (!permiteMultiplosRamais && limitePes !== null && parseInt(quantidade) > limitePes) {
         setQuantidade('');
         return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
     }
@@ -327,10 +349,11 @@ export default function RetroativoScreen() {
 
     try {
       const numRamalFinal = ramaisSelecionados.join(', ');
+      const nomeServicoFinalParaOBanco = isColeta ? `${servico} - ${tipoResina}` : servico;
 
       const novoLancamento = {
         colaborador, 
-        servico, 
+        servico: nomeServicoFinalParaOBanco, 
         fazenda, 
         quadra, 
         ramal: numRamalFinal, 
@@ -438,7 +461,7 @@ export default function RetroativoScreen() {
           </View>
 
           <View style={styles.header}>
-            <Text style={styles.title}>Florestal Pro Sys Retroativo ⏳</Text>
+            <Text style={styles.title}>Resinas Abud ⏳</Text>
             <Text style={styles.subtitle}>Lançamentos com data/hora manuais</Text>
             <Relogio onAtualizar={atualizarMochilaManual} />
           </View>
@@ -552,11 +575,10 @@ export default function RetroativoScreen() {
                   <Text style={styles.textoDica}>Selecione a quadra primeiro para carregar os ramais.</Text>
                 ) : (
                   <View>
-                    {isColeta && (
-                      <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5}}>
-                        <Text style={{fontSize: 12, color: '#7F8C8D'}}>Coleta permite selecionar múltiplos.</Text>
+                    {permiteMultiplosRamais && (
+                      <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 5}}>
                         <TouchableOpacity onPress={selecionarTodosRamais} style={styles.btnSelecionarTodos}>
-                          <Text style={styles.btnSelecionarTodosText}>✓ Todos</Text>
+                          <Text style={styles.btnSelecionarTodosText}>✓ Todos da Quadra</Text>
                         </TouchableOpacity>
                       </View>
                     )}

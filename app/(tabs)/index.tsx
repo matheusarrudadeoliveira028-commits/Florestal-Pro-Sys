@@ -3,11 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import { router, useFocusEffect } from 'expo-router';
 import React, { memo, useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, InteractionManager, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
 // =========================================================================
-// COMPONENTE ISOLADO DE RELÓGIO (Evita engasgos na tela principal)
+// COMPONENTE ISOLADO DE RELÓGIO
 // =========================================================================
 const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
   const [horaAtual, setHoraAtual] = useState(new Date());
@@ -34,12 +34,11 @@ export default function HomeScreen() {
   const [colaborador, setColaborador] = useState('');
   const [servico, setServico] = useState('');
   const [servicoSelecionadoCompleto, setServicoSelecionadoCompleto] = useState<any>(null);
-  
-  // 👉 CORRIGIDO: OPÇÕES SEPARADAS
   const [tipoResina, setTipoResina] = useState('ELLIOTTI');
 
   const [fazenda, setFazenda] = useState('');
   const [quadra, setQuadra] = useState('');
+  
   const [ramaisSelecionados, setRamaisSelecionados] = useState<string[]>([]); 
   const [quantidade, setQuantidade] = useState('');
   const [valorTotalCalculado, setValorTotalCalculado] = useState(0);
@@ -72,8 +71,11 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      carregarUsuarioLogado(); 
-      carregarLancamentosLocais(); 
+      const tarefa = InteractionManager.runAfterInteractions(() => {
+        carregarUsuarioLogado(); 
+        carregarLancamentosLocais(); 
+      });
+      return () => tarefa.cancel();
     }, [])
   );
 
@@ -227,9 +229,12 @@ export default function HomeScreen() {
   }, [servicoSelecionadoCompleto, quantidade]);
 
   const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
+  
+  // 👉 MÁGICA DE PROTEÇÃO: O app só permite múltiplos se o admin mandou ou se a palavra for "coleta" como fallback de segurança.
+  const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
   const toggleRamal = (ramalStr: string) => {
-    if (isColeta) {
+    if (permiteMultiplosRamais) {
       if (ramaisSelecionados.includes(ramalStr)) {
         setRamaisSelecionados(ramaisSelecionados.filter(r => r !== ramalStr));
       } else {
@@ -247,7 +252,8 @@ export default function HomeScreen() {
   const handleMudancaQuantidade = (texto: string) => {
     const valorDigitado = parseInt(texto) || 0;
     
-    if (!isColeta && limitePes !== null && valorDigitado > limitePes) {
+    // O limite só é barrado se o serviço não for de múltiplos ramais
+    if (!permiteMultiplosRamais && limitePes !== null && valorDigitado > limitePes) {
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{
           colaborador: colaborador || 'Não Selecionado',
@@ -273,7 +279,6 @@ export default function HomeScreen() {
     setFazenda(item.fazenda);
     setQuadra(item.quadra);
     
-    // 👉 DESMONTA O NOME DO SERVIÇO SE FOR COLETA PARA EDITAR O TIPO DE RESINA CORRETAMENTE
     let nomePuroServico = item.servico;
     if (item.servico.includes(' - HÍBRIDO')) {
       nomePuroServico = item.servico.replace(' - HÍBRIDO', '');
@@ -287,9 +292,12 @@ export default function HomeScreen() {
     }
 
     setServico(nomePuroServico);
-    setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === nomePuroServico) || null);
+    const servicoEncontrado = listaServicos.find(s => s.nome === nomePuroServico) || null;
+    setServicoSelecionadoCompleto(servicoEncontrado);
     
-    setRamaisSelecionados(String(item.ramal).split(', '));
+    const ramaisArray = String(item.ramal).split(', ');
+    setRamaisSelecionados(ramaisArray);
+    
     setQuantidade(String(item.quantidade));
     setIndexEdicao(index);
     setDataOriginalEdicao(item.data);
@@ -301,7 +309,7 @@ export default function HomeScreen() {
     setDataOriginalEdicao(null);
     setServico('');
     setServicoSelecionadoCompleto(null);
-    setTipoResina('ELLIOTTI'); // Reseta a resina
+    setTipoResina('ELLIOTTI');
     setRamaisSelecionados([]);
     setQuantidade('');
     setValorTotalCalculado(0);
@@ -337,7 +345,7 @@ export default function HomeScreen() {
       }
     }
 
-    if (!isColeta && limitePes !== null && parseInt(quantidade) > limitePes) {
+    if (!permiteMultiplosRamais && limitePes !== null && parseInt(quantidade) > limitePes) {
         setQuantidade('');
         return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
     }
@@ -348,8 +356,6 @@ export default function HomeScreen() {
 
     try {
       const numRamalFinal = ramaisSelecionados.join(', ');
-
-      // 👉 ADICIONA O TIPO DE RESINA NO NOME DO SERVIÇO SE FOR COLETA
       const nomeServicoFinalParaOBanco = isColeta ? `${servico} - ${tipoResina}` : servico;
 
       const novoLancamento = {
@@ -402,8 +408,13 @@ export default function HomeScreen() {
         return dados;
       });
 
-      const { error: dbError } = await supabase.from('diarios_campo').insert(lancamentosProntosParaNuvem);
-      if (dbError) throw dbError;
+      const tamanhoLote = 50;
+      for (let i = 0; i < lancamentosProntosParaNuvem.length; i += tamanhoLote) {
+        const lote = lancamentosProntosParaNuvem.slice(i, i + tamanhoLote);
+        
+        const { error: dbError } = await supabase.from('diarios_campo').insert(lote);
+        if (dbError) throw new Error(`Falha no lote ${i}: ${dbError.message}`);
+      }
       
       await AsyncStorage.removeItem('@lancamentos_off');
       setLancamentosPendentes([]);
@@ -411,7 +422,7 @@ export default function HomeScreen() {
       Alert.alert("🚀 Sincronizado com Sucesso!", "Todas as produções foram enviadas.");
       
     } catch (e: any) {
-      Alert.alert("Erro na Sincronização", "Envio interrompido: " + e.message);
+      Alert.alert("Erro na Sincronização", "A internet falhou no meio do envio. Tente novamente para enviar o restante: " + e.message);
     } finally {
       setSincronizando(false);
     }
@@ -467,7 +478,7 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.header}>
-            <Text style={styles.title}>Florestal Pro Sys</Text>
+            <Text style={styles.title}>Resinas Abud</Text>
             <Text style={styles.subtitle}>Lançamento de Produção</Text>
             <Relogio onAtualizar={atualizarMochilaManual} />
           </View>
@@ -535,7 +546,6 @@ export default function HomeScreen() {
                   </Picker>
                 </View>
 
-                {/* 👉 NOVO: CAMPO DE TIPO DE RESINA (OPÇÕES SEPARADAS) */}
                 {isColeta && (
                   <>
                     <Text style={styles.label}>Tipo de Resina (Coleta):</Text>
@@ -554,11 +564,10 @@ export default function HomeScreen() {
                   <Text style={styles.textoDica}>Selecione a quadra primeiro para carregar os ramais.</Text>
                 ) : (
                   <View>
-                    {isColeta && (
-                      <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5}}>
-                        <Text style={{fontSize: 12, color: '#7F8C8D'}}>Coleta permite selecionar múltiplos.</Text>
+                    {permiteMultiplosRamais && (
+                      <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 5}}>
                         <TouchableOpacity onPress={selecionarTodosRamais} style={styles.btnSelecionarTodos}>
-                          <Text style={styles.btnSelecionarTodosText}>✓ Todos</Text>
+                          <Text style={styles.btnSelecionarTodosText}>✓ Todos da Quadra</Text>
                         </TouchableOpacity>
                       </View>
                     )}
@@ -642,12 +651,20 @@ export default function HomeScreen() {
           <View style={styles.modalOverlay}>
             <View style={styles.modalContentGrande}>
               <Text style={styles.modalTitle}>Lançamentos Pendentes</Text>
-              <ScrollView style={{maxHeight: 500}}>
-                {lancamentosPendentes.length === 0 ? (
-                  <Text style={styles.textoVazio}>Nenhum lançamento offline.</Text>
-                ) : (
-                  lancamentosPendentes.map((item, index) => (
-                    <View key={index} style={styles.itemPendente}>
+              
+              {lancamentosPendentes.length === 0 ? (
+                <Text style={styles.textoVazio}>Nenhum lançamento offline.</Text>
+              ) : (
+                <FlatList
+                  style={{ maxHeight: 500 }}
+                  data={lancamentosPendentes}
+                  keyExtractor={(item, index) => index.toString()}
+                  initialNumToRender={10}
+                  maxToRenderPerBatch={10}
+                  windowSize={5}
+                  removeClippedSubviews={true}
+                  renderItem={({ item, index }) => (
+                    <View style={styles.itemPendente}>
                       <View style={styles.itemInfo}>
                         <Text style={styles.itemColab}>{item.colaborador}</Text>
                         <Text style={styles.itemDetalhes}>{item.fazenda} | Q: {item.quadra} | R: {item.ramal}</Text>
@@ -662,9 +679,10 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       </View>
                     </View>
-                  ))
-                )}
-              </ScrollView>
+                  )}
+                />
+              )}
+
               <TouchableOpacity style={styles.btnFecharModal} onPress={() => setModalPendentesVisivel(false)}>
                 <Text style={styles.btnFecharTexto}>VOLTAR</Text>
               </TouchableOpacity>

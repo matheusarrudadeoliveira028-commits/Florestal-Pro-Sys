@@ -5,11 +5,11 @@ import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'r
 export default function SuporteScreen() {
   
   const abrirWhatsApp = () => {
-    Linking.openURL('https://wa.me/5514997083402');
+    Linking.openURL('https://wa.me/5515996800198');
   };
 
   const enviarEmail = () => {
-    Linking.openURL('mailto:matheusarrudadeoliveira028@gmail.com');
+    Linking.openURL('mailto:brekaztechltda@gmail.com');
   };
 
   return (
