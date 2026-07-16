@@ -57,6 +57,10 @@ export default function RelatoriosScreen() {
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState('TODOS');
   const [fiscalSelecionado, setFiscalSelecionado] = useState('TODOS');
   
+  // 🟢 ESTADOS PARA CONTROLE DE PERFIL
+  const [perfilUsuario, setPerfilUsuario] = useState('ADMIN'); 
+  const [carregandoPerfil, setCarregandoPerfil] = useState(true);
+
   // DATAS E FERIADOS
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
@@ -64,59 +68,17 @@ export default function RelatoriosScreen() {
   const [filtroAtivo, setFiltroAtivo] = useState('');
 
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
+  // 🟢 ESTADO PARA LISTA FILTRADA DE COLABORADORES
+  const [listaColaboradoresFiltrada, setListaColaboradoresFiltrada] = useState<any[]>([]);
   const [listaFiscais, setListaFiscais] = useState<string[]>([]);
   
   const [gerando, setGerando] = useState(false);
   const [carregando, setCarregando] = useState(true);
 
-  useEffect(() => {
-    carregarColaboradores();
-    carregarFiscais();
-    
-    // Sugere a quinzena atual automaticamente baseada no dia de hoje
-    const hoje = new Date();
-    if (hoje.getDate() <= 15) {
-      aplicarFiltroData('1Q');
-    } else {
-      aplicarFiltroData('2Q');
-    }
-  }, []);
-
-  const carregarColaboradores = async () => {
-    setCarregando(true);
-    const { data } = await supabase.from('colaboradores').select('*').order('nome');
-    if (data) setListaColaboradores(data);
-    setCarregando(false);
-  };
-
-  const carregarFiscais = async () => {
-    // Varre o banco de dados atrás de todos os Fiscais/Encarregados já registrados
-    const { data } = await supabase.from('diarios_campo').select('fiscal_nome');
-    if (data) {
-      const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))];
-      setListaFiscais(unicos.sort() as string[]);
-    }
-  };
-
-  // 👉 LÓGICA DE BOTÕES RÁPIDOS (QUINZENAS E MÊS)
-  const aplicarFiltroData = (tipo: '1Q' | '2Q' | 'MES') => {
-    setFiltroAtivo(tipo);
-    const hoje = new Date();
-    const ano = hoje.getFullYear();
-    const mes = hoje.getMonth(); // 0 a 11
-    
-    if (tipo === '1Q') {
-      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
-      setDataFim(`15/${String(mes + 1).padStart(2, '0')}/${ano}`);
-    } else if (tipo === '2Q') {
-      setDataInicio(`16/${String(mes + 1).padStart(2, '0')}/${ano}`);
-      const ultimoDia = new Date(ano, mes + 1, 0).getDate(); 
-      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
-    } else {
-      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
-      const ultimoDia = new Date(ano, mes + 1, 0).getDate();
-      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
-    }
+  // 🟢 FUNÇÕES UTILITÁRIAS
+  const limparNome = (nome: string) => {
+    if (!nome) return '';
+    return nome.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
   };
 
   const converterDataParaBanco = (dataBR: string) => {
@@ -132,11 +94,6 @@ export default function RelatoriosScreen() {
     const m = String(date.getMonth() + 1).padStart(2, '0');
     const d = String(date.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
-  };
-
-  const limparNome = (nome: string) => {
-    if (!nome) return '';
-    return nome.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
   };
 
   const extrairAdmissaoISO = (admStr: any) => {
@@ -163,6 +120,109 @@ export default function RelatoriosScreen() {
     return null;
   };
 
+  useEffect(() => {
+    carregarPerfilUsuario(); 
+    carregarColaboradores();
+    carregarFiscais();
+    
+    const hoje = new Date();
+    if (hoje.getDate() <= 15) {
+      aplicarFiltroData('1Q');
+    } else {
+      aplicarFiltroData('2Q');
+    }
+  }, []);
+
+  // 🟢 EFEITO QUE FILTRA OS COLABORADORES QUANDO O FISCAL MUDA
+  useEffect(() => {
+    const atualizarListaColaboradores = async () => {
+      if (fiscalSelecionado === 'TODOS') {
+        setListaColaboradoresFiltrada(listaColaboradores);
+      } else {
+        // Busca em TODO o histórico quem já fez parte da equipe deste fiscal
+        const { data } = await supabase
+          .from('diarios_campo')
+          .select('colaborador')
+          .eq('fiscal_nome', fiscalSelecionado);
+
+        if (data) {
+          const nomesDaEquipeLimpos = [...new Set(data.map(item => limparNome(item.colaborador)).filter(Boolean))];
+          const filtrados = listaColaboradores.filter(c => nomesDaEquipeLimpos.includes(limparNome(c.nome)));
+          setListaColaboradoresFiltrada(filtrados);
+        } else {
+          setListaColaboradoresFiltrada([]);
+        }
+      }
+      setColaboradorSelecionado('TODOS');
+    };
+
+    if (listaColaboradores.length > 0) {
+      atualizarListaColaboradores();
+    }
+  }, [fiscalSelecionado, listaColaboradores]);
+
+  // 🟢 FUNÇÃO PARA BUSCAR O USUÁRIO LOGADO E VERIFICAR SE É FISCAL DE CAMPO
+  const carregarPerfilUsuario = async () => {
+    setCarregandoPerfil(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      const { data: usuarioData } = await supabase
+        .from('perfis') 
+        .select('cargo, nome')
+        .eq('id', user.id) 
+        .single();
+
+      if (usuarioData) {
+        setPerfilUsuario(usuarioData.cargo);
+        
+        // Se o cargo for "Fiscal de Campo", trava o select no nome dele
+        if (usuarioData.cargo === 'Fiscal de Campo') {
+          setFiscalSelecionado(usuarioData.nome);
+        }
+      }
+    }
+    setCarregandoPerfil(false);
+  };
+
+  const carregarColaboradores = async () => {
+    setCarregando(true);
+    const { data } = await supabase.from('colaboradores').select('*').order('nome');
+    if (data) {
+      setListaColaboradores(data);
+      setListaColaboradoresFiltrada(data); 
+    }
+    setCarregando(false);
+  };
+
+  const carregarFiscais = async () => {
+    const { data } = await supabase.from('diarios_campo').select('fiscal_nome');
+    if (data) {
+      const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))];
+      setListaFiscais(unicos.sort() as string[]);
+    }
+  };
+
+  const aplicarFiltroData = (tipo: '1Q' | '2Q' | 'MES') => {
+    setFiltroAtivo(tipo);
+    const hoje = new Date();
+    const ano = hoje.getFullYear();
+    const mes = hoje.getMonth(); 
+    
+    if (tipo === '1Q') {
+      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      setDataFim(`15/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    } else if (tipo === '2Q') {
+      setDataInicio(`16/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      const ultimoDia = new Date(ano, mes + 1, 0).getDate(); 
+      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    } else {
+      setDataInicio(`01/${String(mes + 1).padStart(2, '0')}/${ano}`);
+      const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+      setDataFim(`${ultimoDia}/${String(mes + 1).padStart(2, '0')}/${ano}`);
+    }
+  };
+
   const gerarPDF = async () => {
     if (!dataInicio || !dataFim) return Alert.alert('Aviso', 'Preencha a data inicial e final!');
 
@@ -184,7 +244,6 @@ export default function RelatoriosScreen() {
     setGerando(true);
 
     try {
-      // CARREGAMENTO DO LOGO 
       let base64Logo = '';
       try {
         const asset = Asset.fromModule(require('../../assets/images/logo.png'));
@@ -210,28 +269,28 @@ export default function RelatoriosScreen() {
         console.warn("Aviso: Não foi possível carregar a logo para o PDF.", imgErr);
       }
 
-      // 🔍 LÓGICA DE FILTRAGEM (FISCAL E COLABORADOR)
       let query = supabase.from('diarios_campo').select('*')
         .gte('data', `${dtInicioBD} 00:00:00`)
         .lte('data', `${dtFimBD} 23:59:59`)
         .order('data', { ascending: true });
 
-      // Filtra por Fiscal se não for TODOS
       if (fiscalSelecionado !== 'TODOS') {
         query = query.eq('fiscal_nome', fiscalSelecionado);
       }
 
-      // Filtra por Colaborador se não for TODOS
       if (colaboradorSelecionado !== 'TODOS') {
         query = query.eq('colaborador', colaboradorSelecionado);
       }
 
-      const { data: lancamentos, error: errLanc } = await query;
+      const { data: lancamentosData, error: errLanc } = await query;
       if (errLanc) throw errLanc;
 
-      if (!lancamentos || lancamentos.length === 0) {
+      const lancamentos = lancamentosData || [];
+
+      // Se não encontrou lançamento e a pesquisa foi para TODOS sem especificar fiscal, aborta.
+      if (lancamentos.length === 0 && colaboradorSelecionado === 'TODOS' && fiscalSelecionado === 'TODOS') {
         setGerando(false);
-        return Alert.alert('Aviso', 'Nenhum lançamento encontrado para este filtro neste período.');
+        return Alert.alert('Aviso', 'Nenhum lançamento encontrado para este período.');
       }
 
       const { data: feriasDB } = await supabase.from('ferias').select('*');
@@ -260,7 +319,41 @@ export default function RelatoriosScreen() {
         return acc;
       }, {});
 
+      // 🟢 O PULO DO GATO APRIMORADO:
+      // Se selecionou uma equipe (Fiscal) e TODOS os colaboradores, varre a lista da equipe inteira
+      // e cria folhas vazias para quem faltou todos os dias!
+      if (fiscalSelecionado !== 'TODOS' && colaboradorSelecionado === 'TODOS') {
+        listaColaboradoresFiltrada.forEach(colab => {
+          const nomeLimpo = limparNome(colab.nome);
+          const temFolha = Object.keys(agrupado).some(chave => limparNome(agrupado[chave].nome) === nomeLimpo);
+          
+          if (!temFolha) {
+            agrupado[`${colab.nome}_Registrado`] = {
+              nome: colab.nome,
+              tipo: 'Registrado',
+              registros: []
+            };
+          }
+        });
+      } else if (colaboradorSelecionado !== 'TODOS') {
+        // Se escolheu um colaborador específico que não tem produção, cria folha vazia
+        const temFolha = Object.keys(agrupado).some(chave => agrupado[chave].nome === colaboradorSelecionado);
+        if (!temFolha) {
+          agrupado[`${colaboradorSelecionado}_Registrado`] = {
+            nome: colaboradorSelecionado,
+            tipo: 'Registrado',
+            registros: []
+          };
+        }
+      }
+
       const chavesFolhas = Object.keys(agrupado);
+      
+      if (chavesFolhas.length === 0) {
+        setGerando(false);
+        return Alert.alert('Aviso', 'Nenhum lançamento encontrado para gerar.');
+      }
+
       let paginasHTML = '';
 
       chavesFolhas.forEach((chave, index) => {
@@ -269,9 +362,10 @@ export default function RelatoriosScreen() {
         const totalGeral = folha.registros.reduce((soma: number, item: any) => soma + (item.valor_total || 0), 0);
         const totalQuantidade = folha.registros.reduce((soma: number, item: any) => soma + (Number(item.quantidade) || 0), 0);
         
+        // Puxa o nome do fiscal da seleção ou do primeiro registro
         const encarregadoNome = folha.registros.length > 0 && folha.registros[0].fiscal_nome 
             ? folha.registros[0].fiscal_nome 
-            : 'Não Identificado';
+            : (fiscalSelecionado !== 'TODOS' ? fiscalSelecionado : 'Não Identificado');
 
         const fazendasTrabalhadas = [...new Set(folha.registros.map((r: any) => r.fazenda).filter(Boolean))].join(' / ') || 'Não Informada';
 
@@ -527,10 +621,15 @@ export default function RelatoriosScreen() {
           </View>
         </View>
 
-        {/* 🟢 NOVO CAMPO: SELEÇÃO DE FISCAL */}
         <Text style={styles.label}>Selecione o Fiscal / Encarregado:</Text>
-        {carregando ? (
+        {carregando || carregandoPerfil ? (
           <ActivityIndicator color="#2980B9" />
+        ) : perfilUsuario === 'Fiscal de Campo' ? (
+          <View style={[styles.input, { backgroundColor: '#EAEDED', justifyContent: 'center' }]}>
+            <Text style={{ fontSize: 16, color: '#7F8C8D', fontWeight: 'bold' }}>
+              {fiscalSelecionado} (Apenas sua equipe)
+            </Text>
+          </View>
         ) : (
           <View style={styles.pickerContainer}>
             <Picker selectedValue={fiscalSelecionado} onValueChange={setFiscalSelecionado} style={styles.picker}>
@@ -547,9 +646,10 @@ export default function RelatoriosScreen() {
           <ActivityIndicator color="#2980B9" />
         ) : (
           <View style={styles.pickerContainer}>
+            {/* 🟢 LISTA EXIBE APENAS OS COLABORADORES DA EQUIPE FILTRADA */}
             <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado} style={styles.picker}>
               <Picker.Item label="👉 TODOS OS COLABORADORES" value="TODOS" />
-              {listaColaboradores.map((item) => (
+              {listaColaboradoresFiltrada.map((item) => (
                 <Picker.Item key={item.id} label={item.nome} value={item.nome} />
               ))}
             </Picker>

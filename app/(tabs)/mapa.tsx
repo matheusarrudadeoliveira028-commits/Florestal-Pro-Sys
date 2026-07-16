@@ -5,7 +5,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import React, { memo, useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, InteractionManager, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, InteractionManager, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
 const alertaHibrido = (titulo: string, mensagem: string) => {
@@ -14,7 +14,7 @@ const alertaHibrido = (titulo: string, mensagem: string) => {
 };
 
 // =========================================================================
-// COMPONENTES ISOLADOS E MEMOIZADOS (React.memo)
+// COMPONENTES ISOLADOS E MEMOIZADOS (React.memo) - MÁXIMA PERFORMANCE
 // =========================================================================
 const FazendaHeader = memo(({ nome, total }: { nome: string, total: number }) => (
   <View style={styles.fazendaHeader}>
@@ -30,48 +30,27 @@ const QuadraHeader = memo(({ nome, total }: { nome: string, total: number }) => 
   </View>
 ));
 
-const RamalItem = memo(({ r, podeEditar, listaServicos, onAtualizar }: any) => {
+// 🟢 ITEM OTIMIZADO: Sem estilos inline (style={{...}}) para evitar recálculos do Garbage Collector
+const RamalItem = memo(({ r, podeEditar, aoTocar }: any) => {
   return (
-    <View style={styles.ramalItem}>
-      <View style={{ flex: 1.5, paddingRight: 10 }}>
+    <TouchableOpacity
+      activeOpacity={podeEditar ? 0.6 : 1}
+      onPress={() => podeEditar && aoTocar(r)}
+      style={styles.ramalItem}
+    >
+      <View style={styles.ramalCol1}>
         <Text style={styles.ramalTexto}>↳ Ramal {r.ramal}</Text>
-        <Text style={styles.miniLabel}>Serviço Vinculado:</Text>
-        
-        <View style={[styles.miniPickerContainer, !podeEditar && styles.pickerBloqueado]}>
-          <Picker
-            enabled={podeEditar} 
-            selectedValue={r.servico}
-            onValueChange={(itemValue) => {
-              if (itemValue !== r.servico && podeEditar) {
-                onAtualizar(r.id, 'servico_permitido', r.servico, itemValue, 'o Serviço');
-              }
-            }}
-            style={styles.miniPicker}
-          >
-            <Picker.Item label="Não Definido" value="Não Definido" />
-            {listaServicos.map((s: any) => (
-              <Picker.Item key={s.id} label={s.nome} value={s.nome} />
-            ))}
-          </Picker>
-        </View>
+        <Text style={styles.ramalSubTexto}>
+          Serviço: <Text style={styles.ramalServico}>{r.servico}</Text>
+        </Text>
       </View>
-
-      <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
-        <Text style={styles.miniLabel}>Qtd Pés (Editar):</Text>
-        <TextInput 
-          editable={podeEditar} 
-          style={[styles.inputEditQtd, !podeEditar && styles.inputBloqueado]} 
-          defaultValue={r.total.toString()}
-          keyboardType="numeric"
-          onEndEditing={(e) => {
-            if (podeEditar) {
-              const novoValor = parseInt(e.nativeEvent.text) || 0;
-              onAtualizar(r.id, 'total_pes', r.total, novoValor, 'a Quantidade de Pés');
-            }
-          }}
-        />
+      <View style={styles.ramalCol2}>
+        <Text style={styles.ramalTotal}>
+          {r.total.toLocaleString('pt-BR')} pés
+        </Text>
+        {podeEditar && <Text style={styles.ramalDicaEditar}>✏️ Tocar para Editar</Text>}
       </View>
-    </View>
+    </TouchableOpacity>
   );
 });
 
@@ -82,7 +61,7 @@ const ResumoCard = memo(({ fazenda, total, quadras }: any) => {
     <View style={styles.resumoCard}>
       <TouchableOpacity style={styles.resumoHeader} onPress={() => setExpandido(!expandido)}>
         <Text style={styles.resumoFazendaNome}>📍 {fazenda}</Text>
-        <View style={{ alignItems: 'flex-end' }}>
+        <View style={styles.resumoCardAlinhamento}>
           <Text style={styles.resumoFazendaTotal}>{total.toLocaleString('pt-BR')} pés</Text>
           <Text style={styles.resumoVerMais}>{expandido ? '▲ Ocultar Quadras' : '▼ Ver Quadras'}</Text>
         </View>
@@ -129,6 +108,11 @@ export default function MapaScreen() {
   const [buscaFazenda, setBuscaFazenda] = useState('');
   const [buscaQuadra, setBuscaQuadra] = useState('');
   const [buscaRamal, setBuscaRamal] = useState('');
+
+  // 🟢 ESTADOS DO MODAL DE EDIÇÃO E EXCLUSÃO
+  const [ramalEditando, setRamalEditando] = useState<any>(null);
+  const [editServico, setEditServico] = useState('');
+  const [editQtd, setEditQtd] = useState('');
 
   useEffect(() => {
     const tarefa = InteractionManager.runAfterInteractions(() => {
@@ -243,13 +227,11 @@ export default function MapaScreen() {
     setCarregando(true);
 
     try {
-      // 👉 CORREÇÃO 2: Vazamento de memória resolvido (Seleciona apenas o necessário)
       let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').eq('fazenda', buscaFazenda);
       
       if (buscaQuadra) query = query.eq('quadra', buscaQuadra);
       if (buscaRamal) query = query.eq('ramal', buscaRamal);
 
-      // 👉 CORREÇÃO 1: Limite aumentado para não cortar ramais grandes
       const { data, error } = await query.limit(3000);
         
       if (error) throw new Error("Falha na rede");
@@ -271,7 +253,6 @@ export default function MapaScreen() {
       if (mapaOffline) {
         let dadosOff = JSON.parse(mapaOffline);
         
-        // 👉 CORREÇÃO 3: Filtro local no modo offline
         if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => i.fazenda === buscaFazenda);
         if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => i.quadra === buscaQuadra);
         if (buscaRamal) dadosOff = dadosOff.filter((i: any) => String(i.ramal) === String(buscaRamal));
@@ -342,42 +323,6 @@ export default function MapaScreen() {
     setTotalGeralArvores(somaGeral);
     setDadosAgrupadosParaPDF(agrupamento); 
     setListaPlanaParaUI(listaPlana);       
-  };
-
-  const handleAtualizar = useCallback((id: number, campo: string, valorAntigo: any, valorNovo: any, nomeAmigavel: string) => {
-    if (valorAntigo === valorNovo) return; 
-    
-    if (isOffline) {
-      return alertaHibrido("⚠️ Sem Internet", "Não é possível alterar a estrutura da fazenda no modo offline.");
-    }
-
-    if (Platform.OS === 'web') {
-      const confirmado = window.confirm(`⚠️ Tem certeza que deseja alterar ${nomeAmigavel} para "${valorNovo}"?`);
-      if (confirmado) atualizarConfigRamal(id, campo, valorNovo);
-    } else {
-      Alert.alert(
-        "⚠️ Atenção",
-        `Tem certeza que deseja alterar ${nomeAmigavel} para "${valorNovo}"?`,
-        [
-          { text: "Cancelar", style: "cancel" },
-          { text: "Sim, Alterar", onPress: () => atualizarConfigRamal(id, campo, valorNovo) }
-        ]
-      );
-    }
-  }, [isOffline]);
-
-  const atualizarConfigRamal = async (id: number, campo: string, valor: any) => {
-    setCarregando(true);
-    const { error } = await supabase.from('mapa_fazendas').update({ [campo]: valor }).eq('id', id);
-    if (error) {
-      alertaHibrido("Erro", "Falha ao atualizar o dado.");
-    } else {
-      const novaListaBruta = dadosBrutos.map(item => item.id === id ? { ...item, [campo]: valor } : item);
-      setDadosBrutos(novaListaBruta);
-      processarDadosMapa(novaListaBruta);
-      carregarDicionarioEServicos();
-    }
-    setCarregando(false);
   };
 
   const gerarPdfMapa = async () => {
@@ -507,18 +452,101 @@ export default function MapaScreen() {
     }
   };
 
+  // 🟢 AÇÕES DO MODAL (EDITAR E EXCLUIR)
+  const abrirModalEdicao = useCallback((ramal: any) => {
+    setEditServico(ramal.servico);
+    setEditQtd(ramal.total.toString());
+    setRamalEditando(ramal);
+  }, []);
+
+  const handleAtualizar = async (id: number, campo: string, valor: any) => {
+    setCarregando(true);
+    const { error } = await supabase.from('mapa_fazendas').update({ [campo]: valor }).eq('id', id);
+    if (error) {
+      alertaHibrido("Erro", "Falha ao atualizar o dado.");
+    } else {
+      const novaListaBruta = dadosBrutos.map(item => item.id === id ? { ...item, [campo]: valor } : item);
+      setDadosBrutos(novaListaBruta);
+      processarDadosMapa(novaListaBruta);
+      carregarDicionarioEServicos();
+    }
+    setCarregando(false);
+  };
+
+  const salvarEdicao = () => {
+    if (isOffline) {
+      return alertaHibrido("⚠️ Sem Internet", "Não é possível alterar no modo offline.");
+    }
+    
+    const novoTotal = parseInt(editQtd) || 0;
+    let atualizouAlgo = false;
+
+    if (editServico !== ramalEditando.servico) {
+      handleAtualizar(ramalEditando.id, 'servico_permitido', editServico);
+      atualizouAlgo = true;
+    }
+    
+    if (novoTotal !== ramalEditando.total) {
+      handleAtualizar(ramalEditando.id, 'total_pes', novoTotal);
+      atualizouAlgo = true;
+    }
+    
+    if (!atualizouAlgo) {
+      setRamalEditando(null);
+    } else {
+      setRamalEditando(null);
+    }
+  };
+
+  const confirmarExclusao = () => {
+    if (isOffline) {
+      return alertaHibrido("⚠️ Sem Internet", "Não é possível excluir no modo offline.");
+    }
+
+    const mensagem = `Tem certeza que deseja EXCLUIR DEFINITIVAMENTE o Ramal ${ramalEditando.ramal}? Esta ação não pode ser desfeita.`;
+
+    if (Platform.OS === 'web') {
+      const confirmado = window.confirm(`⚠️ ATENÇÃO!\n\n${mensagem}`);
+      if (confirmado) excluirRamalDb(ramalEditando.id);
+    } else {
+      Alert.alert(
+        "⚠️ Excluir Ramal",
+        mensagem,
+        [
+          { text: "Cancelar", style: "cancel" },
+          { text: "Sim, Excluir", style: "destructive", onPress: () => excluirRamalDb(ramalEditando.id) }
+        ]
+      );
+    }
+  };
+
+  const excluirRamalDb = async (id: number) => {
+    setCarregando(true);
+    const { error } = await supabase.from('mapa_fazendas').delete().eq('id', id);
+    if (error) {
+      alertaHibrido("Erro", "Falha ao excluir o ramal. Verifique sua conexão.");
+    } else {
+      const novaListaBruta = dadosBrutos.filter(item => item.id !== id);
+      setDadosBrutos(novaListaBruta);
+      processarDadosMapa(novaListaBruta);
+      carregarDicionarioEServicos();
+      setRamalEditando(null);
+    }
+    setCarregando(false);
+  };
+
   const renderItem = useCallback(({ item }: any) => {
     if (item.type === 'FAZENDA') return <FazendaHeader nome={item.nome} total={item.total} />;
     if (item.type === 'QUADRA') return <QuadraHeader nome={item.nome} total={item.total} />;
     if (item.type === 'RAMAL') {
       return (
         <View style={styles.ramalWrapper}>
-          <RamalItem r={item.data} podeEditar={podeEditar} listaServicos={listaServicos} onAtualizar={handleAtualizar} />
+          <RamalItem r={item.data} podeEditar={podeEditar} aoTocar={abrirModalEdicao} />
         </View>
       );
     }
     return null;
-  }, [podeEditar, listaServicos, handleAtualizar]);
+  }, [podeEditar, abrirModalEdicao]);
 
   return (
     <View style={styles.container}>
@@ -543,17 +571,17 @@ export default function MapaScreen() {
       </View>
 
       {abaAtiva === 'resumo' && (
-        <View style={{ flex: 1 }}>
+        <View style={styles.flex1}>
           {carregando ? (
-            <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 30}} />
+            <ActivityIndicator size="large" color="#27AE60" style={styles.loaderMargin} />
           ) : listaResumo.length === 0 ? (
-            <Text style={{ textAlign: 'center', color: '#7F8C8D', marginTop: 20 }}>Nenhum dado encontrado no momento.</Text>
+            <Text style={styles.textoVazio}>Nenhum dado encontrado no momento.</Text>
           ) : (
             <FlatList
               data={listaResumo}
               keyExtractor={(item) => item.fazenda}
               renderItem={({ item }) => <ResumoCard fazenda={item.fazenda} total={item.total} quadras={item.quadras} />}
-              contentContainerStyle={{ paddingBottom: 50 }}
+              contentContainerStyle={styles.listaPaddingBottom}
             />
           )}
         </View>
@@ -562,7 +590,7 @@ export default function MapaScreen() {
       {abaAtiva === 'mapa' && (
         <>
           <View style={styles.filtrosCard}>
-            <Text style={styles.filtrosTitulo}>Localizar para Editar:</Text>
+            <Text style={styles.filtrosTitulo}>Localizar para Editar / Visualizar:</Text>
             
             <View style={styles.row}>
               <View style={styles.col}>
@@ -586,7 +614,7 @@ export default function MapaScreen() {
             </View>
 
             <View style={styles.row}>
-              <View style={[styles.col, { flex: 1, marginRight: 10 }]}>
+              <View style={[styles.col, styles.flex1MargemDireita]}>
                 <Text style={styles.labelInput}>Ramal (Opcional)</Text>
                 <View style={[styles.pickerWrapper, !buscaQuadra && styles.pickerDisabled]}>
                   <Picker enabled={!!buscaQuadra} selectedValue={buscaRamal} onValueChange={setBuscaRamal} style={styles.pickerItem}>
@@ -595,7 +623,7 @@ export default function MapaScreen() {
                   </Picker>
                 </View>
               </View>
-              <View style={{ justifyContent: 'flex-end' }}>
+              <View style={styles.btnBottomRight}>
                 <TouchableOpacity style={styles.btnBuscarFazenda} onPress={buscarMapaDetalhado} disabled={carregando}>
                   {carregando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnBuscarFazendaTexto}>🔍 Buscar Detalhes</Text>}
                 </TouchableOpacity>
@@ -608,36 +636,99 @@ export default function MapaScreen() {
             <Text style={styles.placarNumero}>{totalGeralArvores.toLocaleString('pt-BR')}</Text>
           </View>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <View style={styles.rowRightPdf}>
             <TouchableOpacity style={styles.btnPdf} onPress={gerarPdfMapa} disabled={gerandoPDF || listaPlanaParaUI.length === 0}>
-              {gerandoPDF ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnPdfTexto}>🖨️ Imprimir PDF</Text>}
+              {gerandoPDF ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnPdfTexto}>{podeEditar ? '🖨️ Imprimir PDF' : '📖 Abrir Caderno (PDF)'}</Text>}
             </TouchableOpacity>
           </View>
 
           {carregando ? (
-            <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 30}} />
+            <ActivityIndicator size="large" color="#27AE60" style={styles.loaderMargin} />
           ) : listaPlanaParaUI.length === 0 ? (
-            <Text style={{ textAlign: 'center', color: '#7F8C8D', marginTop: 20 }}>Use os filtros acima para editar os ramais.</Text>
+            <Text style={styles.textoVazio}>Use os filtros acima para listar os ramais.</Text>
           ) : (
             <FlatList
               data={listaPlanaParaUI}
               keyExtractor={(item) => item.id}
               renderItem={renderItem}
-              initialNumToRender={15} 
-              maxToRenderPerBatch={20}
-              windowSize={5}
+              // 🟢 OTIMIZAÇÕES EXTREMAS DE LISTA 🟢
+              initialNumToRender={12} 
+              maxToRenderPerBatch={10}
+              windowSize={3} // Reduz brutalmente o uso de memória (padrão é 21)
+              updateCellsBatchingPeriod={30}
               removeClippedSubviews={true}
-              contentContainerStyle={{ paddingBottom: 50, paddingTop: 10 }}
+              contentContainerStyle={styles.listaPadding}
             />
           )}
         </>
       )}
+
+      {/* 🟢 MODAL DE EDIÇÃO E EXCLUSÃO GLOBAL */}
+      <Modal visible={!!ramalEditando} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>
+              Estrutura: Ramal {ramalEditando?.ramal}
+            </Text>
+
+            <Text style={styles.labelInput}>Serviço Vinculado</Text>
+            <View style={[styles.pickerWrapper, styles.marginB15]}>
+              <Picker
+                selectedValue={editServico}
+                onValueChange={setEditServico}
+                style={styles.pickerItem}
+              >
+                <Picker.Item label="Não Definido" value="Não Definido" />
+                {listaServicos.map((s: any) => (
+                  <Picker.Item key={s.id} label={s.nome} value={s.nome} />
+                ))}
+              </Picker>
+            </View>
+
+            <Text style={styles.labelInput}>Quantidade de Pés</Text>
+            <TextInput
+              style={styles.inputModalQtd}
+              value={editQtd}
+              onChangeText={setEditQtd}
+              keyboardType="numeric"
+            />
+
+            <View style={styles.modalActionsCol}>
+              <TouchableOpacity style={styles.btnModalSalvar} onPress={salvarEdicao}>
+                <Text style={styles.btnModalTexto}>💾 Salvar Alterações</Text>
+              </TouchableOpacity>
+
+              <View style={styles.row}>
+                <TouchableOpacity style={styles.btnModalCancelar} onPress={() => setRamalEditando(null)}>
+                  <Text style={styles.btnModalTextoCinzento}>Cancelar</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.btnModalExcluir} onPress={confirmarExclusao}>
+                  <Text style={styles.btnModalTexto}>🗑️ Excluir Ramal</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F2F4F7', padding: 15 },
+  flex1: { flex: 1 },
+  loaderMargin: { marginTop: 30 },
+  textoVazio: { textAlign: 'center', color: '#7F8C8D', marginTop: 20 },
+  listaPaddingBottom: { paddingBottom: 50 },
+  listaPadding: { paddingBottom: 50, paddingTop: 10 },
+  flex1MargemDireita: { flex: 1, marginRight: 10 },
+  btnBottomRight: { justifyContent: 'flex-end' },
+  rowRightPdf: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 },
+  marginB15: { marginBottom: 15 },
+
   offlineBadge: { backgroundColor: '#E74C3C', padding: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 5, marginBottom: 10 },
   offlineText: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
   header: { marginBottom: 15, marginTop: 10, alignItems: 'center' },
@@ -669,7 +760,7 @@ const styles = StyleSheet.create({
   placarTexto: { color: '#D5F5E3', fontSize: 15, fontWeight: 'bold' },
   placarNumero: { color: '#FFFFFF', fontSize: 40, fontWeight: '900', marginVertical: 5 },
   
-  btnPdf: { width: 150, backgroundColor: '#E67E22', padding: 12, borderRadius: 8, alignItems: 'center' },
+  btnPdf: { width: 180, backgroundColor: '#E67E22', padding: 12, borderRadius: 8, alignItems: 'center' },
   btnPdfTexto: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   
   fazendaHeader: { backgroundColor: '#FFFFFF', padding: 15, marginTop: 15, borderTopLeftRadius: 12, borderTopRightRadius: 12, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 3, borderBottomColor: '#2C3E50', elevation: 1 },
@@ -681,24 +772,37 @@ const styles = StyleSheet.create({
   quadraTotal: { fontSize: 15, fontWeight: 'bold', color: '#D35400' },
   
   ramalWrapper: { backgroundColor: '#F8FAFC', paddingHorizontal: 10 }, 
-  ramalItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F2F4F4', alignItems: 'center' },
+  ramalItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, backgroundColor: '#F8FAFC', borderBottomWidth: 1, borderBottomColor: '#F2F4F4', alignItems: 'center' },
+  ramalCol1: { flex: 1.5 },
+  ramalCol2: { alignItems: 'flex-end', justifyContent: 'center' },
   ramalTexto: { fontSize: 14, color: '#2C3E50', fontWeight: 'bold' },
-  
-  miniLabel: { fontSize: 14, color: '#7F8C8D', marginTop: 4, fontWeight: 'bold' },
-  miniPickerContainer: { backgroundColor: '#D4E6F1', borderRadius: 6, marginTop: 4, height: 60, justifyContent: 'center', overflow: 'hidden' },
-  pickerBloqueado: { backgroundColor: '#EAECEE', opacity: 0.8 }, 
-  miniPicker: { height: 60, color: '#2980B9', width: '100%', fontWeight: 'bold', fontSize: 12 },
-
-  inputEditQtd: { backgroundColor: '#EAEDED', color: '#2C3E50', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, marginTop: 4, fontSize: 14, fontWeight: 'bold', textAlign: 'center', minWidth: 80, borderWidth: 1, borderColor: '#BDC3C7' },
-  inputBloqueado: { backgroundColor: '#F8FAFC', color: '#95A5A6', borderColor: 'transparent' },
+  ramalSubTexto: { fontSize: 13, color: '#7F8C8D', marginTop: 2 },
+  ramalServico: { fontWeight: 'bold', color: '#2980B9' },
+  ramalTotal: { fontSize: 15, fontWeight: 'bold', color: '#D35400' },
+  ramalDicaEditar: { fontSize: 11, color: '#3498DB', marginTop: 4 },
 
   resumoCard: { backgroundColor: '#FFF', borderRadius: 10, marginBottom: 15, elevation: 2, borderWidth: 1, borderColor: '#BDC3C7', overflow: 'hidden' },
   resumoHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, backgroundColor: '#2C3E50', alignItems: 'center' },
   resumoFazendaNome: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
+  resumoCardAlinhamento: { alignItems: 'flex-end' },
   resumoFazendaTotal: { color: '#2ECC71', fontSize: 16, fontWeight: 'bold' },
   resumoVerMais: { color: '#BDC3C7', fontSize: 12, marginTop: 4 },
   resumoQuadrasContainer: { padding: 10, backgroundColor: '#F8FAFC' },
   resumoQuadraRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#EAEDED' },
   resumoQuadraNome: { color: '#34495E', fontSize: 15, fontWeight: 'bold' },
-  resumoQuadraTotal: { color: '#D35400', fontSize: 15, fontWeight: 'bold' }
+  resumoQuadraTotal: { color: '#D35400', fontSize: 15, fontWeight: 'bold' },
+
+  // 🟢 ESTILOS DO MODAL DE EDIÇÃO E EXCLUSÃO
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  modalContainer: { backgroundColor: '#FFF', padding: 20, borderRadius: 12, elevation: 5 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50', marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#ECF0F1', paddingBottom: 10 },
+  inputModalQtd: { backgroundColor: '#F8FAFC', color: '#2C3E50', paddingHorizontal: 10, borderRadius: 6, fontSize: 14, fontWeight: 'bold', borderWidth: 1, borderColor: '#BDC3C7', marginBottom: 25, height: 45 },
+  
+  modalActionsCol: { flexDirection: 'column' },
+  btnModalSalvar: { backgroundColor: '#27AE60', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
+  btnModalCancelar: { backgroundColor: '#EAEDED', padding: 12, borderRadius: 8, flex: 1, alignItems: 'center', marginRight: 5 },
+  btnModalExcluir: { backgroundColor: '#E74C3C', padding: 12, borderRadius: 8, flex: 1, alignItems: 'center', marginLeft: 5 },
+  
+  btnModalTexto: { color: '#FFF', fontWeight: 'bold', fontSize: 15 },
+  btnModalTextoCinzento: { color: '#34495E', fontWeight: 'bold', fontSize: 15 }
 });

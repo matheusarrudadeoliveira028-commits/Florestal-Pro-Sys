@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
-import React, { memo, useCallback, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, InteractionManager, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
@@ -25,18 +25,22 @@ const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () 
 };
 
 // =========================================================================
-// COMPONENTES MEMOIZADOS
+// COMPONENTES MEMOIZADOS (Ultra leves)
 // =========================================================================
 const ItemMapa = memo(({ item, onEditar, onExcluir }: any) => (
   <View style={styles.itemLista}>
     <View style={{flex: 1}}>
-      <Text style={styles.itemNome}>Fz: {item.fazenda} | Q: {item.quadra} | R: {item.ramal}</Text>
+      <Text style={styles.itemNome}>↳ Ramal {item.ramal}</Text>
       <Text style={styles.itemDetalhe}>Capacidade: {item.total_pes} pés</Text>
-      <Text style={styles.itemDetalhe}>Serviço Autorizado: {item.servico_permitido || 'Livre'}</Text>
+      <Text style={styles.itemDetalhe}>Serviço Autorizado: <Text style={{fontWeight: 'bold', color: '#2980B9'}}>{item.servico_permitido || 'Livre'}</Text></Text>
     </View>
-    <View style={{flexDirection: 'row', gap: 15}}>
-      <TouchableOpacity onPress={() => onEditar(item)}><Text style={styles.iconeAcao}>✏️</Text></TouchableOpacity>
-      <TouchableOpacity onPress={() => onExcluir(item.id, item.fazenda, item.ramal)}><Text style={styles.iconeAcao}>🗑️</Text></TouchableOpacity>
+    <View style={{flexDirection: 'row', gap: 15, alignItems: 'center'}}>
+      <TouchableOpacity onPress={() => onEditar(item)} style={styles.btnAcao}>
+        <Text style={styles.iconeAcao}>✏️</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => onExcluir(item.id, item.fazenda, item.ramal)} style={styles.btnAcao}>
+        <Text style={styles.iconeAcao}>🗑️</Text>
+      </TouchableOpacity>
     </View>
   </View>
 ));
@@ -81,26 +85,19 @@ export default function CadastrosScreen() {
     if (data) setListaSetores(data);
   };
 
+  // 🟢 BUSCA TODOS OS MAPAS SEM LIMITE (O SEGREDO DA PERFORMANCE ESTÁ NA RENDERIZAÇÃO, NÃO NA MEMÓRIA)
   const carregarMapas = async () => {
-    const { data: ultimosMapas } = await supabase
+    const { data: todosMapas } = await supabase
       .from('mapa_fazendas')
       .select('*')
-      .order('id', { ascending: false })
-      .limit(50); 
+      .limit(10000); // Traz todos os dados de forma leve
 
-    if (ultimosMapas) {
-      setListaMapas(ultimosMapas);
-    }
-
-    const { data: fazendas } = await supabase
-      .from('mapa_fazendas')
-      .select('fazenda')
-      .order('id', { ascending: false })
-      .limit(5000);
-
-    if (fazendas) {
-      const unicas = [...new Set(fazendas.map(item => item.fazenda).filter(Boolean))] as string[];
-      setFazendasUnicas(unicas);
+    if (todosMapas) {
+      setListaMapas(todosMapas);
+      
+      // Gera as fazendas únicas para os Selects/Pickers
+      const unicas = [...new Set(todosMapas.map(item => item.fazenda).filter(Boolean))] as string[];
+      setFazendasUnicas(unicas.sort());
     }
   };
 
@@ -114,10 +111,10 @@ export default function CadastrosScreen() {
   const [precoServico, setPrecoServico] = useState('');
   const [tipoCobranca, setTipoCobranca] = useState('milheiro');
   const [isCoringa, setIsCoringa] = useState('nao'); 
-  const [permiteMultiplos, setPermiteMultiplos] = useState('nao'); // 👉 NOVO ESTADO AQUI
+  const [permiteMultiplos, setPermiteMultiplos] = useState('nao'); 
   const [editandoServicoId, setEditandoServicoId] = useState<number | null>(null);
 
-  // === ESTADOS: MAPA ===
+  // === ESTADOS: MAPA FORMULÁRIO ===
   const [nomeFazendaSelecionada, setNomeFazendaSelecionada] = useState(''); 
   const [nomeFazendaDigitada, setNomeFazendaDigitada] = useState(''); 
   const [numeroQuadra, setNumeroQuadra] = useState('');
@@ -129,6 +126,25 @@ export default function CadastrosScreen() {
   // === ESTADOS: SETOR ===
   const [nomeSetor, setNomeSetor] = useState('');
   const [editandoSetorId, setEditandoSetorId] = useState<number | null>(null);
+
+  // 🟢 NOVOS ESTADOS: FILTROS DE VISUALIZAÇÃO DO MAPA 🟢
+  const [filtroFazenda, setFiltroFazenda] = useState('');
+  const [filtroQuadra, setFiltroQuadra] = useState('');
+
+  // 🟢 LÓGICA DE AGRUPAMENTO E ORDENAÇÃO INSTANTÂNEA 🟢
+  const quadrasFiltradas = useMemo(() => {
+    if (!filtroFazenda) return [];
+    const quadras = listaMapas.filter(m => m.fazenda === filtroFazenda).map(m => m.quadra);
+    return [...new Set(quadras)].sort();
+  }, [filtroFazenda, listaMapas]);
+
+  const ramaisParaRenderizar = useMemo(() => {
+    if (!filtroFazenda || !filtroQuadra) return [];
+    return listaMapas
+      .filter(m => m.fazenda === filtroFazenda && m.quadra === filtroQuadra)
+      .sort((a, b) => (parseInt(a.ramal) || 0) - (parseInt(b.ramal) || 0)); // Ordem numérica perfeita
+  }, [filtroFazenda, filtroQuadra, listaMapas]);
+
 
   const aplicarMascaraData = (texto: string) => {
     let v = texto.replace(/\D/g, ''); 
@@ -174,14 +190,14 @@ export default function CadastrosScreen() {
     
     const precoFormatado = parseFloat(precoServico.replace(',', '.'));
     const coringaBool = isCoringa === 'sim'; 
-    const multiplosBool = permiteMultiplos === 'sim'; // 👉 NOVO
+    const multiplosBool = permiteMultiplos === 'sim'; 
     
     const payload = { 
       nome: nomeServico, 
       preco_base: precoFormatado, 
       tipo_cobranca: tipoCobranca,
       is_coringa: coringaBool,
-      permite_multiplos: multiplosBool // 👉 SALVANDO NO BANCO
+      permite_multiplos: multiplosBool 
     };
 
     let error;
@@ -287,7 +303,7 @@ export default function CadastrosScreen() {
     setPrecoServico(item.preco_base ? item.preco_base.toString().replace('.', ',') : '');
     setTipoCobranca(item.tipo_cobranca || 'milheiro');
     setIsCoringa(item.is_coringa ? 'sim' : 'nao');
-    setPermiteMultiplos(item.permite_multiplos ? 'sim' : 'nao'); // 👉 NOVO
+    setPermiteMultiplos(item.permite_multiplos ? 'sim' : 'nao');
     setEditandoServicoId(item.id);
   };
 
@@ -303,6 +319,9 @@ export default function CadastrosScreen() {
     setTotalPes(item.total_pes ? item.total_pes.toString() : '');
     setServicoVinculado(item.servico_permitido || '');
     setEditandoMapaId(item.id);
+    
+    // Rola para o topo para mostrar o formulário
+    if (Platform.OS === 'web') window.scrollTo(0, 0);
   }, []);
 
   const cancelarEdicaoMapa = () => {
@@ -333,14 +352,15 @@ export default function CadastrosScreen() {
   };
 
   const excluirMapa = useCallback((id: number, fazenda: string, ramal: string) => {
-    confirmacaoWebMobile('Excluir Ramal', `Apagar o Ramal ${ramal} da Fazenda ${fazenda}?`, async () => {
+    confirmacaoWebMobile('Excluir Ramal', `Apagar DEFINITIVAMENTE o Ramal ${ramal} da Fazenda ${fazenda}?`, async () => {
       await supabase.from('mapa_fazendas').delete().eq('id', id); 
       carregarMapas();
     });
   }, []);
 
+  // 🟢 NOVO CABEÇALHO DA LISTA (AGORA CONTÉM OS FILTROS)
   const renderFormularioMapa = () => (
-    <View style={{ marginBottom: 20 }}>
+    <View style={{ marginBottom: 10 }}>
       <Text style={styles.formTitle}>{editandoMapaId ? '✏️ Editando Ramal' : 'Mapear Novo Ramal'}</Text>
       
       <Text style={styles.label}>Fazenda:</Text>
@@ -402,11 +422,43 @@ export default function CadastrosScreen() {
         </TouchableOpacity>
       )}
 
+      {/* 🟢 SEÇÃO DE FILTRO ULTRA LEVE 🟢 */}
       <View style={styles.secaoLista}>
-        <Text style={styles.tituloLista}>Últimos Ramais Adicionados</Text>
-        <Text style={{fontSize: 12, color: '#E67E22', marginBottom: 10, fontWeight: 'bold'}}>
-          Exibindo os últimos 50 ramais para poupar a memória do tablet.
+        <Text style={styles.tituloLista}>Gerenciar Estrutura</Text>
+        <Text style={{fontSize: 13, color: '#7F8C8D', marginBottom: 15}}>
+          Para garantir o máximo de velocidade, selecione a Fazenda e a Quadra para listar e editar os ramais salvos.
         </Text>
+
+        <View style={styles.row}>
+          <View style={styles.col}>
+            <Text style={styles.label}>Visualizar Fazenda:</Text>
+            <View style={styles.pickerContainer}>
+              <Picker 
+                selectedValue={filtroFazenda} 
+                onValueChange={(val) => { setFiltroFazenda(val); setFiltroQuadra(''); }} 
+                style={styles.picker}
+              >
+                <Picker.Item label="Selecione..." value="" />
+                {fazendasUnicas.map((f, idx) => <Picker.Item key={idx} label={f} value={f} />)}
+              </Picker>
+            </View>
+          </View>
+          <View style={styles.col}>
+            <Text style={styles.label}>Visualizar Quadra:</Text>
+            <View style={[styles.pickerContainer, !filtroFazenda && {opacity: 0.5, backgroundColor: '#EAEDED'}]}>
+              <Picker 
+                enabled={!!filtroFazenda} 
+                selectedValue={filtroQuadra} 
+                onValueChange={setFiltroQuadra} 
+                style={styles.picker}
+              >
+                <Picker.Item label={filtroFazenda ? "Todas" : "Aguardando..."} value="" />
+                {quadrasFiltradas.map((q, idx) => <Picker.Item key={idx} label={`Quadra ${q}`} value={q as string} />)}
+              </Picker>
+            </View>
+          </View>
+        </View>
+
       </View>
     </View>
   );
@@ -517,7 +569,6 @@ export default function CadastrosScreen() {
                 </Picker>
               </View>
 
-              {/* 👉 NOVO CAMPO PARA O ADMINISTRADOR */}
               <Text style={styles.label}>Permite selecionar Múltiplos Ramais no app?</Text>
               <View style={styles.pickerContainer}>
                 <Picker selectedValue={permiteMultiplos} onValueChange={setPermiteMultiplos} style={styles.picker}>
@@ -576,12 +627,23 @@ export default function CadastrosScreen() {
 
           {abaAtiva === 'mapa' && (
             <FlatList
-              data={listaMapas}
+              data={ramaisParaRenderizar}
               keyExtractor={(item) => item.id.toString()}
               ListHeaderComponent={renderFormularioMapa()}
-              initialNumToRender={10}
-              maxToRenderPerBatch={10}
+              // ListEmptyComponent garante boa comunicação quando nada é selecionado
+              ListEmptyComponent={
+                <View style={{padding: 20, alignItems: 'center'}}>
+                  <Text style={{color: '#95A5A6', textAlign: 'center'}}>
+                    {!filtroFazenda || !filtroQuadra 
+                      ? '👆 Use os filtros acima para carregar a lista de ramais.' 
+                      : 'Nenhum ramal cadastrado nesta quadra.'}
+                  </Text>
+                </View>
+              }
+              initialNumToRender={15}
+              maxToRenderPerBatch={20}
               windowSize={5}
+              contentContainerStyle={{ paddingBottom: 50 }}
               renderItem={({ item }) => (
                 <ItemMapa 
                   item={item} 
@@ -618,10 +680,11 @@ const styles = StyleSheet.create({
   col: { width: '48%' },
   button: { backgroundColor: '#2980B9', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 25 },
   buttonText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-  secaoLista: { marginTop: 40, borderTopWidth: 1, borderColor: '#E0E6ED', paddingTop: 20 },
-  tituloLista: { fontSize: 16, fontWeight: 'bold', color: '#34495E', marginBottom: 15 },
-  itemLista: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: '#E0E6ED' },
-  itemNome: { fontSize: 15, fontWeight: 'bold', color: '#2C3E50' },
-  itemDetalhe: { fontSize: 12, color: '#7F8C8D', marginTop: 2 },
-  iconeAcao: { fontSize: 20 }
+  secaoLista: { marginTop: 40, borderTopWidth: 1, borderColor: '#E0E6ED', paddingTop: 20, marginBottom: 10 },
+  tituloLista: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50', marginBottom: 5 },
+  itemLista: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8FAFC', padding: 15, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: '#E0E6ED' },
+  itemNome: { fontSize: 16, fontWeight: 'bold', color: '#2C3E50' },
+  itemDetalhe: { fontSize: 13, color: '#7F8C8D', marginTop: 2 },
+  iconeAcao: { fontSize: 20 },
+  btnAcao: { padding: 5 }
 });
