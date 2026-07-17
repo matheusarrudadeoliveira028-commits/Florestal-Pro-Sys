@@ -6,6 +6,34 @@ import React, { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, InteractionManager, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
+const alertaWebMobile = (titulo: string, mensagem: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${titulo}\n\n${mensagem}`);
+  } else {
+    Alert.alert(titulo, mensagem);
+  }
+};
+
+const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () => void) => {
+  if (Platform.OS === 'web') {
+    const confirmado = window.confirm(`${titulo}\n\n${mensagem}`);
+    if (confirmado) aoConfirmar();
+  } else {
+    Alert.alert(titulo, mensagem, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sim', style: 'destructive', onPress: aoConfirmar }
+    ]);
+  }
+};
+
+// 🟢 FUNÇÃO BLINDADA: Evita tela branca (crash) convertendo de forma segura qualquer tipo de dado
+const converterParaNumero = (valor: any): number => {
+  if (valor === null || valor === undefined || valor === '') return 0;
+  const valorFormatado = String(valor).replace(',', '.');
+  const numeroParsed = parseFloat(valorFormatado);
+  return isNaN(numeroParsed) ? 0 : numeroParsed;
+};
+
 // =========================================================================
 // COMPONENTE ISOLADO DE RELÓGIO
 // =========================================================================
@@ -222,7 +250,8 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (servicoSelecionadoCompleto && quantidade) {
-      const qtdNum = parseInt(quantidade) || 0;
+      // 🟢 USANDO FUNÇÃO DE CONVERSÃO BLINDADA
+      const qtdNum = converterParaNumero(quantidade);
       let valorUnitario = servicoSelecionadoCompleto.preco_base || 0;
       if (servicoSelecionadoCompleto.tipo_cobranca === 'milheiro') valorUnitario = valorUnitario / 1000;
       setValorTotalCalculado(qtdNum * valorUnitario);
@@ -250,7 +279,8 @@ export default function HomeScreen() {
   };
 
   const handleMudancaQuantidade = (texto: string) => {
-    const valorDigitado = parseInt(texto) || 0;
+    // 🟢 USANDO FUNÇÃO DE CONVERSÃO BLINDADA
+    const valorDigitado = converterParaNumero(texto);
     
     if (!permiteMultiplosRamais && limitePes !== null && valorDigitado > limitePes) {
       if (!isOffline) {
@@ -344,7 +374,8 @@ export default function HomeScreen() {
       }
     }
 
-    if (!permiteMultiplosRamais && limitePes !== null && parseInt(quantidade) > limitePes) {
+    // 🟢 USANDO FUNÇÃO DE CONVERSÃO BLINDADA NA CHECAGEM DE LIMITE
+    if (!permiteMultiplosRamais && limitePes !== null && converterParaNumero(quantidade) > limitePes) {
         setQuantidade('');
         return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
     }
@@ -363,7 +394,8 @@ export default function HomeScreen() {
         fazenda, 
         quadra, 
         ramal: numRamalFinal, 
-        quantidade: parseInt(quantidade), 
+        // 🟢 USANDO FUNÇÃO DE CONVERSÃO BLINDADA NO SALVAMENTO
+        quantidade: converterParaNumero(quantidade), 
         valor_unitario: valorUnitario, 
         valor_total: valorTotalCalculado, 
         data: dataOriginalEdicao ? dataOriginalEdicao : dataMomento.toISOString(),
@@ -593,7 +625,7 @@ export default function HomeScreen() {
                 <TextInput 
                   style={[styles.inputQuantidade, ramaisSelecionados.length === 0 && styles.disabledInput]} 
                   placeholder="Ex: 50" 
-                  keyboardType="numeric" 
+                  keyboardType="decimal-pad" 
                   value={quantidade} 
                   onChangeText={handleMudancaQuantidade} 
                   editable={ramaisSelecionados.length > 0} 
@@ -602,7 +634,7 @@ export default function HomeScreen() {
                 {valorTotalCalculado > 0 && (
                   <View style={styles.cardGanho}>
                     <Text style={styles.textoGanho}>Valor deste lançamento:</Text>
-                    <Text style={styles.valorGanho}>R$ {valorTotalCalculado.toFixed(2).replace('.', ',')}</Text>
+                    <Text style={styles.valorGanho}>R$ {Number(valorTotalCalculado).toFixed(2).replace('.', ',')}</Text>
                   </View>
                 )}
 
@@ -667,7 +699,7 @@ export default function HomeScreen() {
                       <View style={styles.itemInfo}>
                         <Text style={styles.itemColab}>{item.colaborador}</Text>
                         <Text style={styles.itemDetalhes}>{item.fazenda} | Q: {item.quadra} | R: {item.ramal}</Text>
-                        <Text style={styles.itemDetalhes}>{item.servico} | Qtd: {item.quantidade} | R$ {item.valor_total.toFixed(2)}</Text>
+                        <Text style={styles.itemDetalhes}>{item.servico} | Qtd: {item.quantidade} | R$ {Number(item.valor_total).toFixed(2)}</Text>
                       </View>
                       <View style={styles.itemAcoes}>
                         <TouchableOpacity style={styles.btnEditarPendente} onPress={() => prepararEdicao(index)}>
@@ -733,8 +765,8 @@ const styles = StyleSheet.create({
   inputQuantidade: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 18, backgroundColor: '#F8FAFC', height: 50 },
   disabledInput: { backgroundColor: '#EAECEE' },
   
-  row: { flexDirection: 'column' },
-  col: { width: '100%', marginBottom: 10 },
+  row: { flexDirection: 'row' },
+  col: { flex: 1, marginHorizontal: 5 },
   
   cardGanho: { backgroundColor: '#E8F8F5', padding: 15, borderRadius: 10, marginTop: 20, alignItems: 'center', borderLeftWidth: 5, borderLeftColor: '#27AE60' },
   textoGanho: { color: '#1E8449', fontSize: 13, fontWeight: 'bold' },
