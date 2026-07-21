@@ -97,8 +97,6 @@ export default function DrawerLayout() {
     );
   }
 
-  // 👉 AQUI A MÁGICA FINAL: Retiramos o <GestureHandlerRootView> daqui
-  // e retornamos o Drawer diretamente, pois a Raiz já está cuidando dos gestos!
   return (
     <Drawer
       screenOptions={{
@@ -127,6 +125,17 @@ export default function DrawerLayout() {
           drawerLabel: 'Lançar Produção',
           title: 'Início',
           drawerIcon: ({ color, size }) => <Ionicons name="leaf" size={size} color={color} />,
+        }}
+      />
+
+      {/* 👇 NOVA TELA ADICIONADA AQUI 👇 */}
+      <Drawer.Screen
+        name="AcompanhamentoScreen"
+        options={{
+          drawerLabel: 'Acompanhamento',
+          title: 'Acompanhamento',
+          drawerIcon: ({ color, size }) => <Ionicons name="analytics" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('acompanhamento') 
         }}
       />
 

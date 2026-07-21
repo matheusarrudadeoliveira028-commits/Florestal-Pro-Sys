@@ -26,7 +26,8 @@ export default function PermissoesScreen() {
     { chave: 'cadastros', nome: '📝 Cadastros' },
     { chave: 'relatorios', nome: '📄 Relatórios' },
     { chave: 'colaboradores', nome: '🤝 Colaboradores' },
-    { chave: 'retroativo', nome: '⏳ Lançamento Retroativo' }
+    { chave: 'retroativo', nome: '⏳ Lançamento Retroativo' },
+    { chave: 'AcompanhamentoScreen', nome: '📝 Acompanhamento Diário' }
   ];
 
   useEffect(() => {

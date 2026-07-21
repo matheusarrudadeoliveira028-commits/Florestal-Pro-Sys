@@ -395,16 +395,46 @@ export default function RelatoriosScreen() {
           const registrosDoDia = folha.registros.filter((r: any) => r.data.startsWith(isoDate));
 
           if (registrosDoDia.length > 0) {
-            registrosDoDia.forEach((item: any) => {
+            // 👉 ALGORITMO DE AGRUPAMENTO
+            // Agrupa os lançamentos por Serviço, Fazenda, Quadra e Valor Unitário
+            const registrosAgrupados = registrosDoDia.reduce((acc: any, item: any) => {
+              const chave = `${item.servico}_${item.fazenda}_${item.quadra}_${item.valor_unitario}`;
+              
+              if (!acc[chave]) {
+                // Se ainda não existe esse agrupamento no dia, cria o primeiro registro
+                acc[chave] = {
+                  ...item,
+                  quantidade: Number(item.quantidade) || 0,
+                  valor_total: Number(item.valor_total) || 0,
+                  ramais: item.ramal ? [String(item.ramal)] : []
+                };
+              } else {
+                // Se já existe, apenas soma a quantidade e o valor, e adiciona o ramal à lista
+                acc[chave].quantidade += Number(item.quantidade) || 0;
+                acc[chave].valor_total += Number(item.valor_total) || 0;
+                if (item.ramal) {
+                  acc[chave].ramais.push(String(item.ramal));
+                }
+              }
+              return acc;
+            }, {});
+
+            // 👉 GERAÇÃO DAS LINHAS HTML AGRUPADAS
+            Object.values(registrosAgrupados).forEach((item: any) => {
+              // Remove ramais duplicados e formata com vírgula
+              const ramaisUnicos = [...new Set(item.ramais)];
+              const ramaisStr = ramaisUnicos.join(', ') || '-'; 
+              
               const valorUni = item.valor_unitario ? item.valor_unitario.toFixed(4).replace('.', ',') : '0,00';
               const valorTot = item.valor_total ? item.valor_total.toFixed(2).replace('.', ',') : '0,00';
+              
               linhasTabela += `
                 <tr>
                   <td>${diaMesStr}</td>
                   <td>${item.servico || '-'}</td>
                   <td>${item.fazenda || '-'}</td>
                   <td>${item.quadra || '-'}</td>
-                  <td>${item.ramal || '-'}</td>
+                  <td>${ramaisStr}</td>
                   <td>${item.quantidade || '-'}</td>
                   <td>${valorUni}</td>
                   <td>R$ ${valorTot}</td>

@@ -58,6 +58,9 @@ export default function CarregamentosScreen() {
   const [procedenciaNome, setProcedenciaNome] = useState('');
   const [pesoLiquidoTotal, setPesoLiquidoTotal] = useState('');
   const [mediaGeral, setMediaGeral] = useState('0,00');
+  
+  // 👉 NOVO ESTADO: Observação
+  const [observacao, setObservacao] = useState('');
 
   const [itemFazenda, setItemFazenda] = useState('');
   const [itemVariedade, setItemVariedade] = useState('Elliotti');
@@ -73,7 +76,6 @@ export default function CarregamentosScreen() {
   const [buscando, setBuscando] = useState(false);
   const [gerandoPDF, setGerandoPDF] = useState(false);
 
-  // 👉 InteractionManager APLICADO AQUI
   useFocusEffect(
     useCallback(() => {
       const tarefa = InteractionManager.runAfterInteractions(() => {
@@ -206,7 +208,8 @@ export default function CarregamentosScreen() {
         variedade: item.variedade,
         quantidade: qtdLote,
         peso_liquido: mediaCalculada ? mediaCalculada * qtdLote : null,
-        media_tambor: mediaCalculada
+        media_tambor: mediaCalculada,
+        observacao: observacao // 👉 Inserindo no Banco
       };
     });
 
@@ -271,6 +274,7 @@ export default function CarregamentosScreen() {
     setProcedenciaNome('');
     setItensCarga([]);
     setPesoLiquidoTotal('');
+    setObservacao(''); 
   };
 
   const editarCarga = useCallback((romaneioAgrupado: any) => {
@@ -279,6 +283,7 @@ export default function CarregamentosScreen() {
     setNumeroRomaneio(romaneioAgrupado.numero_romaneio);
     setProcedenciaTipo(romaneioAgrupado.procedencia_tipo);
     setProcedenciaNome(romaneioAgrupado.procedencia_nome || '');
+    setObservacao(romaneioAgrupado.observacao || ''); 
     
     const carrinhoRecriado = romaneioAgrupado.itens.map((i: any, index: number) => ({
       id_temp: index.toString(),
@@ -311,6 +316,14 @@ export default function CarregamentosScreen() {
     linhas.forEach(l => {
       linhasTabelaHtml += `<tr><td>${l.fazenda}</td><td>${l.variedade}</td><td>${l.quantidade} Tb</td></tr>`;
     });
+
+    // 👉 BLOCO HTML DA OBSERVAÇÃO PARA O PDF INDIVIDUAL
+    const blocoObservacao = base.observacao ? `
+      <div class="box" style="margin-top: 10px;">
+        <span class="label">Observações da Carga:</span><br>
+        <span class="value" style="font-size: 14px; font-weight: normal;">${base.observacao}</span>
+      </div>
+    ` : '';
 
     const htmlContent = `
       <html>
@@ -358,6 +371,8 @@ export default function CarregamentosScreen() {
             </div>
           </div>
 
+          ${blocoObservacao}
+
           <div class="signature"><hr><p><strong>Assinatura do Responsável (Expedição)</strong></p></div>
           <div class="footer">Documento gerado automaticamente pelo Sistema Resinas Abud.</div>
         </body>
@@ -400,6 +415,7 @@ export default function CarregamentosScreen() {
             data_saida: curr.data_saida,
             procedencia_tipo: curr.procedencia_tipo,
             procedencia_nome: curr.procedencia_nome,
+            observacao: curr.observacao, 
             itens: [],
             totalQtd: 0,
             totalPeso: 0
@@ -417,6 +433,7 @@ export default function CarregamentosScreen() {
     setBuscando(false);
   };
 
+  // 👉 NOVO GERADOR DE PDF DO RELATÓRIO
   const gerarPdfRelatorio = async () => {
     if (listaRelatorioAgrupada.length === 0) return Alert.alert("Aviso", "Faça uma busca primeiro.");
     setGerandoPDF(true);
@@ -443,6 +460,17 @@ export default function CarregamentosScreen() {
           <td>${mediaCalculada}</td>
         </tr>
       `;
+
+      // 👉 AQUI A OBSERVAÇÃO É INSERIDA SE EXISTIR
+      if (romaneio.observacao) {
+        linhasTabela += `
+          <tr>
+            <td colspan="6" style="text-align: left; font-size: 11px; color: #555; background-color: #F8FAFC; border-top: none; font-style: italic;">
+              <strong style="color: #2980B9;">📝 Obs:</strong> ${romaneio.observacao}
+            </td>
+          </tr>
+        `;
+      }
     });
 
     const htmlContent = `
@@ -608,7 +636,7 @@ export default function CarregamentosScreen() {
               )}
             </View>
 
-            <Text style={styles.formTitle}>3. Totais e Pesagem Oficial</Text>
+            <Text style={styles.formTitle}>3. Totais, Pesagem e Observações</Text>
             <View style={styles.row}>
               <View style={styles.col}>
                 <Text style={styles.label}>Total de Tambores:</Text>
@@ -619,6 +647,16 @@ export default function CarregamentosScreen() {
                 <TextInput style={styles.input} value={pesoLiquidoTotal} onChangeText={setPesoLiquidoTotal} keyboardType="numeric" placeholder="Opcional agora" />
               </View>
             </View>
+
+            {/* 👉 CAMPO DE OBSERVAÇÃO */}
+            <Text style={styles.label}>Observações (Opcional):</Text>
+            <TextInput 
+              style={[styles.input, { height: 80, textAlignVertical: 'top' }]} 
+              value={observacao} 
+              onChangeText={setObservacao} 
+              placeholder="Digite alguma observação sobre o romaneio ou a carga..." 
+              multiline={true} 
+            />
 
             <View style={styles.caixaMedia}>
               <Text style={styles.mediaTexto}>Média Geral da Carga:</Text>
