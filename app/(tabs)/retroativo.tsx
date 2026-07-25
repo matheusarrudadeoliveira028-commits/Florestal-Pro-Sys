@@ -6,6 +6,34 @@ import React, { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, InteractionManager, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
+const alertaWebMobile = (titulo: string, mensagem: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${titulo}\n\n${mensagem}`);
+  } else {
+    Alert.alert(titulo, mensagem);
+  }
+};
+
+const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () => void) => {
+  if (Platform.OS === 'web') {
+    const confirmado = window.confirm(`${titulo}\n\n${mensagem}`);
+    if (confirmado) aoConfirmar();
+  } else {
+    Alert.alert(titulo, mensagem, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sim', style: 'destructive', onPress: aoConfirmar }
+    ]);
+  }
+};
+
+// 🟢 FUNÇÃO BLINDADA: Evita tela branca (crash) convertendo de forma segura qualquer tipo de dado
+const converterParaNumero = (valor: any): number => {
+  if (valor === null || valor === undefined || valor === '') return 0;
+  const valorFormatado = String(valor).replace(',', '.');
+  const numeroParsed = parseFloat(valorFormatado);
+  return isNaN(numeroParsed) ? 0 : numeroParsed;
+};
+
 // =========================================================================
 // COMPONENTE ISOLADO DE RELÓGIO
 // =========================================================================
@@ -54,7 +82,6 @@ export default function RetroativoScreen() {
   const [fazendasDisponiveis, setFazendasDisponiveis] = useState<string[]>([]);
   const [quadrasDisponiveis, setQuadrasDisponiveis] = useState<string[]>([]);
   const [ramaisDisponiveis, setRamaisDisponiveis] = useState<any[]>([]);
-  const [limitePes, setLimitePes] = useState<number | null>(null);
   
   const [salvando, setSalvando] = useState(false);
   const [carregandoDados, setCarregandoDados] = useState(true);
@@ -164,7 +191,7 @@ export default function RetroativoScreen() {
 
   useEffect(() => {
     if (indexEdicao === null) {
-      setQuadra(''); setRamaisSelecionados([]); setLimitePes(null);
+      setQuadra(''); setRamaisSelecionados([]);
     }
     if (fazenda) setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))] as string[]);
     else setQuadrasDisponiveis([]);
@@ -172,7 +199,7 @@ export default function RetroativoScreen() {
 
   useEffect(() => {
     if (indexEdicao === null) {
-      setRamaisSelecionados([]); setLimitePes(null);
+      setRamaisSelecionados([]);
     }
     if (quadra) {
       const ramaisDessaQuadra = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra);
@@ -184,31 +211,25 @@ export default function RetroativoScreen() {
   }, [quadra, fazenda, mapaCompleto]);
 
   useEffect(() => {
-    if (ramaisSelecionados.length === 1) {
-      const ramalSelecionado = ramaisDisponiveis.find(r => String(r.ramal) === ramaisSelecionados[0]);
-      if (ramalSelecionado && ramalSelecionado.total_pes) {
-        setLimitePes(ramalSelecionado.total_pes);
-      } else {
-        setLimitePes(null);
-      }
-    } else {
-      setLimitePes(null);
-    }
-  }, [ramaisSelecionados, ramaisDisponiveis]);
-
-  useEffect(() => {
     if (servicoSelecionadoCompleto && quantidade) {
-      const qtdNum = parseInt(quantidade) || 0;
+      const qtdNum = converterParaNumero(quantidade);
       let valorUnitario = servicoSelecionadoCompleto.preco_base || 0;
       if (servicoSelecionadoCompleto.tipo_cobranca === 'milheiro') valorUnitario = valorUnitario / 1000;
       setValorTotalCalculado(qtdNum * valorUnitario);
     } else setValorTotalCalculado(0);
   }, [servicoSelecionadoCompleto, quantidade]);
 
+  // 🟢 IDENTIFICADORES INTELIGENTES
   const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
-  
-  // 👉 MELHORIA 3: LÓGICA DE MÚLTIPLOS RAMAIS INVISÍVEL (OBEDECE AO ADMIN)
+  const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
+
+  // 🟢 CÁLCULO MÁGICO DOS PÉS
+  const somaPesSelecionados = ramaisDisponiveis
+    .filter(r => ramaisSelecionados.includes(String(r.ramal)))
+    .reduce((acc, curr) => acc + (converterParaNumero(curr.total_pes) || 0), 0);
+  
+  const limitePesCalculado = somaPesSelecionados > 0 ? somaPesSelecionados : null;
 
   const toggleRamal = (ramalStr: string) => {
     if (permiteMultiplosRamais) {
@@ -226,11 +247,15 @@ export default function RetroativoScreen() {
     setRamaisSelecionados(ramaisDisponiveis.map(r => String(r.ramal)));
   };
 
-  // 👉 LÓGICA DE ALERTAS E TRAVA
+  // 👉 LÓGICA DE ALERTAS E TRAVA COM ESCUDO OFFLINE
   const handleMudancaQuantidade = (texto: string) => {
-    const valorDigitado = parseInt(texto) || 0;
+    const valorDigitado = converterParaNumero(texto);
     
-    if (!permiteMultiplosRamais && limitePes !== null && valorDigitado > limitePes) {
+    // Identificando o fiscal real para o alerta
+    const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
+    const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || 'Não Identificado';
+
+    if (!isCarregamentoResina && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{
           colaborador: colaborador || 'Não Selecionado',
@@ -239,12 +264,12 @@ export default function RetroativoScreen() {
           ramal: ramaisSelecionados.join(', ') || 'Nenhum',
           servico: servico || 'Não Selecionado',
           quantidade_tentada: valorDigitado,
-          limite_permitido: limitePes,
-          fiscal_nome: perfilLogado?.nome || 'Fiscal Não Identificado',
+          limite_permitido: limitePesCalculado,
+          fiscal_nome: fiscalRealDaEquipe,
           tipo_resina: isColeta ? tipoResina : null
-        }]).then(); 
+        }]).then().catch(() => { console.log('Alerta bloqueado pela falta de rede'); }); 
       }
-      Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
+      Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");
       setQuantidade(''); 
     } else {
       setQuantidade(texto);
@@ -270,7 +295,7 @@ export default function RetroativoScreen() {
     const item = lancamentosPendentes[index];
     setColaborador(item.colaborador);
     setFazenda(item.fazenda);
-    setQuadra(item.quadra);
+    setQuadra(item.quadra && item.quadra !== '-' ? item.quadra : '');
     
     let nomePuroServico = item.servico;
     if (item.servico.includes(' - HÍBRIDO')) {
@@ -288,7 +313,13 @@ export default function RetroativoScreen() {
     setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === nomePuroServico) || null);
     
     setTipoResina(item.tipo_resina || 'ELLIOTTI');
-    setRamaisSelecionados(String(item.ramal).split(', '));
+    
+    if (item.ramal && item.ramal !== '-') {
+      setRamaisSelecionados(String(item.ramal).split(', '));
+    } else {
+      setRamaisSelecionados([]);
+    }
+    
     setQuantidade(String(item.quantidade));
 
     // Extrai data e hora salvas e coloca de volta nos campos
@@ -316,31 +347,36 @@ export default function RetroativoScreen() {
   };
 
   const salvarLancamento = async () => {
-    if (!colaborador || !servico || !fazenda || !quadra || ramaisSelecionados.length === 0 || !quantidade || !dataRetroativa || !horaRetroativa) { 
-      return Alert.alert("Aviso", "Preencha todos os campos, incluindo a Data e Hora!"); 
+    if (!colaborador || !servico || !fazenda || !quantidade || !dataRetroativa || !horaRetroativa) { 
+      return Alert.alert("Aviso", "Preencha os campos principais, incluindo a Data e Hora!"); 
     }
 
     if (dataRetroativa.length !== 10) return Alert.alert("Erro", "Formato de data inválido. Use DD/MM/AAAA");
     if (horaRetroativa.length !== 5) return Alert.alert("Erro", "Formato de hora inválido. Use HH:MM");
 
-    // Formata a data e hora digitada pelo usuário
     const [dia, mes, ano] = dataRetroativa.split('/');
     const hojeISO = `${ano}-${mes}-${dia}`;
     const dataIsoFinal = `${hojeISO}T${horaRetroativa}:00.000Z`;
 
-    for (let r of ramaisSelecionados) {
-      const ramalInfo = mapaCompleto.find(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === r);
-      if (!ramalInfo) {
-        return Alert.alert("❌ Erro", `O ramal ${r} não foi encontrado no mapa desta fazenda e quadra.`);
+    if (!isCarregamentoResina) {
+      if (!quadra || ramaisSelecionados.length === 0) {
+        return Alert.alert("Aviso", "Preencha a Quadra e o Ramal!");
       }
-      if (ramalInfo.data_bloqueio && hojeISO !== ramalInfo.data_bloqueio) { 
-        return Alert.alert("📅 Data Bloqueada", `Ramal ${r} permitido apenas em: ${new Date(ramalInfo.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
+      
+      for (let r of ramaisSelecionados) {
+        const ramalInfo = mapaCompleto.find(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === r);
+        if (!ramalInfo) {
+          return Alert.alert("❌ Erro", `O ramal ${r} não foi encontrado no mapa desta fazenda e quadra.`);
+        }
+        if (ramalInfo.data_bloqueio && hojeISO !== ramalInfo.data_bloqueio) { 
+          return Alert.alert("📅 Data Bloqueada", `Ramal ${r} permitido apenas em: ${new Date(ramalInfo.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
+        }
       }
-    }
 
-    if (!permiteMultiplosRamais && limitePes !== null && parseInt(quantidade) > limitePes) {
-        setQuantidade('');
-        return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o permitido para este ramal.");
+      if (limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
+          setQuantidade('');
+          return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");
+      }
     }
 
     setSalvando(true);
@@ -348,20 +384,25 @@ export default function RetroativoScreen() {
     if (servicoSelecionadoCompleto?.tipo_cobranca === 'milheiro') valorUnitario = valorUnitario / 1000;
 
     try {
-      const numRamalFinal = ramaisSelecionados.join(', ');
+      const numRamalFinal = isCarregamentoResina ? '-' : ramaisSelecionados.join(', ');
+      const quadraFinal = isCarregamentoResina ? '-' : quadra;
       const nomeServicoFinalParaOBanco = isColeta ? `${servico} - ${tipoResina}` : servico;
+
+      // 🟢 CORREÇÃO DO FISCAL: Pega sempre o oficial
+      const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
+      const fiscalOficialDaEquipe = dadosColab?.fiscal_vinculado || 'Não Identificado';
 
       const novoLancamento = {
         colaborador, 
         servico: nomeServicoFinalParaOBanco, 
         fazenda, 
-        quadra, 
+        quadra: quadraFinal, 
         ramal: numRamalFinal, 
-        quantidade: parseInt(quantidade), 
+        quantidade: converterParaNumero(quantidade), 
         valor_unitario: valorUnitario, 
         valor_total: valorTotalCalculado, 
         data: dataIsoFinal, 
-        fiscal_nome: perfilLogado?.nome || 'Fiscal Não Identificado',
+        fiscal_nome: fiscalOficialDaEquipe,
         tipo_resina: isColeta ? tipoResina : null
       };
 
@@ -398,11 +439,24 @@ export default function RetroativoScreen() {
     try {
       const lancamentosProntosParaNuvem = lancamentosPendentes.map(item => {
         const { foto_local, foto_url, ...dados } = item;
+        
+        if (!dados.quadra || dados.quadra === null) dados.quadra = '-';
+        if (!dados.ramal || dados.ramal === null) dados.ramal = '-';
+        
+        const colabRef = listaColaboradores.find(c => c.nome === dados.colaborador);
+        if(colabRef && colabRef.fiscal_vinculado) {
+             dados.fiscal_nome = colabRef.fiscal_vinculado;
+        }
+
         return dados;
       });
 
-      const { error: dbError } = await supabase.from('diarios_campo').insert(lancamentosProntosParaNuvem);
-      if (dbError) throw dbError;
+      const tamanhoLote = 50;
+      for (let i = 0; i < lancamentosProntosParaNuvem.length; i += tamanhoLote) {
+        const lote = lancamentosProntosParaNuvem.slice(i, i + tamanhoLote);
+        const { error: dbError } = await supabase.from('diarios_campo').insert(lote);
+        if (dbError) throw dbError;
+      }
       
       await AsyncStorage.removeItem('@lancamentos_off');
       setLancamentosPendentes([]);
@@ -539,10 +593,10 @@ export default function RetroativoScreen() {
 
                   <View style={styles.col}>
                     <Text style={styles.label}>Quadra:</Text>
-                    <View style={[styles.pickerContainer, !fazenda && styles.disabled]}>
-                      <Picker enabled={!!fazenda} selectedValue={quadra} onValueChange={setQuadra} style={styles.picker}>
-                        <Picker.Item label="..." value="" />
-                        {quadrasDisponiveis.map((q, i) => (<Picker.Item key={i} label={q} value={q} />))}
+                    <View style={[styles.pickerContainer, (!fazenda || isCarregamentoResina) && styles.disabled]}>
+                      <Picker enabled={!!fazenda && !isCarregamentoResina} selectedValue={isCarregamentoResina ? "" : quadra} onValueChange={setQuadra} style={styles.picker}>
+                        <Picker.Item label={isCarregamentoResina ? "Não exigida" : "..."} value="" />
+                        {!isCarregamentoResina && quadrasDisponiveis.map((q, i) => (<Picker.Item key={i} label={q} value={q} />))}
                       </Picker>
                     </View>
                   </View>
@@ -570,45 +624,60 @@ export default function RetroativoScreen() {
                   </>
                 )}
 
-                <Text style={styles.label}>Ramal:</Text>
-                {!quadra ? (
-                  <Text style={styles.textoDica}>Selecione a quadra primeiro para carregar os ramais.</Text>
-                ) : (
-                  <View>
-                    {permiteMultiplosRamais && (
-                      <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 5}}>
-                        <TouchableOpacity onPress={selecionarTodosRamais} style={styles.btnSelecionarTodos}>
-                          <Text style={styles.btnSelecionarTodosText}>✓ Todos da Quadra</Text>
-                        </TouchableOpacity>
+                {!isCarregamentoResina && (
+                  <>
+                    <Text style={styles.label}>Ramal:</Text>
+                    {!quadra ? (
+                      <Text style={styles.textoDica}>Selecione a quadra primeiro para carregar os ramais.</Text>
+                    ) : (
+                      <View>
+                        {permiteMultiplosRamais && (
+                          <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 5}}>
+                            <TouchableOpacity onPress={selecionarTodosRamais} style={styles.btnSelecionarTodos}>
+                              <Text style={styles.btnSelecionarTodosText}>✓ Todos da Quadra</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                        
+                        <View style={styles.chipsContainer}>
+                          {ramaisDisponiveis.map((r, i) => {
+                            const rStr = String(r.ramal);
+                            const selecionado = ramaisSelecionados.includes(rStr);
+                            return (
+                              <TouchableOpacity 
+                                key={i} 
+                                style={[styles.chip, selecionado && styles.chipSelecionado]} 
+                                onPress={() => toggleRamal(rStr)}
+                              >
+                                <Text style={[styles.chipText, selecionado && styles.chipTextSelecionado]}>{rStr}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+
+                        {somaPesSelecionados > 0 && (
+                          <TouchableOpacity 
+                            style={styles.dicaPreenchimento} 
+                            onPress={() => handleMudancaQuantidade(String(somaPesSelecionados))}
+                          >
+                            <Text style={styles.textoDicaPreenchimento}>
+                              💡 Total do(s) ramal(is): <Text style={{fontWeight: 'bold'}}>{somaPesSelecionados} pés</Text>. Toque para preencher.
+                            </Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     )}
-                    
-                    <View style={styles.chipsContainer}>
-                      {ramaisDisponiveis.map((r, i) => {
-                        const rStr = String(r.ramal);
-                        const selecionado = ramaisSelecionados.includes(rStr);
-                        return (
-                          <TouchableOpacity 
-                            key={i} 
-                            style={[styles.chip, selecionado && styles.chipSelecionado]} 
-                            onPress={() => toggleRamal(rStr)}
-                          >
-                            <Text style={[styles.chipText, selecionado && styles.chipTextSelecionado]}>{rStr}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
+                  </>
                 )}
 
                 <Text style={styles.label}>Quantidade Total (no lote selecionado):</Text>
                 <TextInput 
-                  style={[styles.inputQuantidade, ramaisSelecionados.length === 0 && styles.disabledInput]} 
+                  style={[styles.inputQuantidade, !isCarregamentoResina && ramaisSelecionados.length === 0 && styles.disabledInput]} 
                   placeholder="Ex: 50" 
-                  keyboardType="numeric" 
+                  keyboardType="decimal-pad" 
                   value={quantidade} 
                   onChangeText={handleMudancaQuantidade} 
-                  editable={ramaisSelecionados.length > 0} 
+                  editable={isCarregamentoResina || ramaisSelecionados.length > 0} 
                 />
 
                 {valorTotalCalculado > 0 && (
@@ -643,10 +712,10 @@ export default function RetroativoScreen() {
                           <Ionicons name="checkmark-circle" size={16} color="#27AE60" style={{ marginTop: 2 }} />
                           <View style={{ flex: 1 }}>
                             <Text style={styles.loteItemTextoBold}>
-                              {lote.fazenda} - Q: {lote.quadra} <Text style={{color: '#E74C3C'}}>({dataVisor})</Text>
+                              {lote.fazenda} {lote.quadra && lote.quadra !== '-' ? `- Q: ${lote.quadra}` : ''} <Text style={{color: '#E74C3C'}}>({dataVisor})</Text>
                             </Text>
                             <Text style={styles.loteItemTexto}>
-                              {lote.servico} (R: {lote.ramal}) ➔ {lote.quantidade} un
+                              {lote.servico} {lote.ramal && lote.ramal !== '-' ? `(R: ${lote.ramal})` : ''} ➔ {lote.quantidade} un
                             </Text>
                             {lote.tipo_resina && (
                               <Text style={[styles.loteItemTexto, {color: '#8E44AD', fontWeight: 'bold', fontSize: 11}]}>
@@ -702,7 +771,7 @@ export default function RetroativoScreen() {
                       <View key={index} style={styles.itemPendente}>
                         <View style={styles.itemInfo}>
                           <Text style={styles.itemColab}>{item.colaborador} - <Text style={{color: '#E74C3C', fontSize: 13}}>{dataPendente}</Text></Text>
-                          <Text style={styles.itemDetalhes}>{item.fazenda} | Q: {item.quadra} | R: {item.ramal}</Text>
+                          <Text style={styles.itemDetalhes}>{item.fazenda} {item.quadra && item.quadra !== '-' ? `| Q: ${item.quadra}` : ''} {item.ramal && item.ramal !== '-' ? `| R: ${item.ramal}` : ''}</Text>
                           <Text style={styles.itemDetalhes}>
                             {item.servico} {item.tipo_resina ? `(${item.tipo_resina})` : ''} | Qtd: {item.quantidade} | R$ {item.valor_total.toFixed(2)}
                           </Text>
@@ -770,6 +839,9 @@ const styles = StyleSheet.create({
   btnSelecionarTodosText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
   textoDica: { color: '#7F8C8D', fontSize: 13, fontStyle: 'italic', marginTop: 5 },
   
+  dicaPreenchimento: { backgroundColor: '#EBF5FB', padding: 10, borderRadius: 8, marginTop: 2, marginBottom: 15, borderWidth: 1, borderColor: '#AED6F1', alignItems: 'center' },
+  textoDicaPreenchimento: { color: '#2980B9', fontSize: 12, fontStyle: 'italic' },
+
   inputQuantidade: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 18, backgroundColor: '#F8FAFC', height: 50 },
   disabledInput: { backgroundColor: '#EAECEE' },
   

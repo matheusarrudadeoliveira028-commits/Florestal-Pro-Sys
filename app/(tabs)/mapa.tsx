@@ -92,6 +92,7 @@ export default function MapaScreen() {
   const [listaPlanaParaUI, setListaPlanaParaUI] = useState<any[]>([]);
   
   const [totalGeralArvores, setTotalGeralArvores] = useState(0);
+  const [totalGeralResumo, setTotalGeralResumo] = useState(0); // 🟢 ESTADO DO TOTAL DO RESUMO
   const [carregando, setCarregando] = useState(false); 
   const [gerandoPDF, setGerandoPDF] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
@@ -124,7 +125,8 @@ export default function MapaScreen() {
 
   useEffect(() => {
     if (buscaFazenda && dicionario[buscaFazenda]) {
-      const quadras = Object.keys(dicionario[buscaFazenda].quadras).sort();
+      // 🟢 CORREÇÃO DA ORDEM DAS QUADRAS (Ex: 1, 2, 10, 30)
+      const quadras = Object.keys(dicionario[buscaFazenda].quadras).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       setQuadrasDisponiveis(quadras);
     } else {
       setQuadrasDisponiveis([]);
@@ -134,7 +136,8 @@ export default function MapaScreen() {
 
   useEffect(() => {
     if (buscaFazenda && buscaQuadra && dicionario[buscaFazenda]?.quadras[buscaQuadra]) {
-      const ramais = dicionario[buscaFazenda].quadras[buscaQuadra].ramais.sort((a: string, b: string) => parseInt(a) - parseInt(b));
+      // 🟢 CORREÇÃO DA ORDEM DOS RAMAIS
+      const ramais = dicionario[buscaFazenda].quadras[buscaQuadra].ramais.sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
       setRamaisDisponiveis(ramais);
     } else {
       setRamaisDisponiveis([]);
@@ -164,7 +167,8 @@ export default function MapaScreen() {
         await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs));
       }
 
-      const { data: mapaResumo, error } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes');
+      // 🟢 MANTIDO O LIMITE QUE VOCÊ COLOCOU: 6000
+      const { data: mapaResumo, error } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes').limit(6000);
       if (error) throw new Error("Falha na rede");
 
       if (mapaResumo) {
@@ -185,13 +189,17 @@ export default function MapaScreen() {
 
   const montarDicionario = (data: any[]) => {
     const dic: any = {};
-    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ') : 'N/A';
+    let somaResumoLocal = 0; // 🟢 ACUMULADOR DO TOTAL DO RESUMO
+    // 🟢 CORREÇÃO: Forçando .toUpperCase() para agrupar Fazendas com grafias diferentes
+    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
     data.forEach(item => {
       const faz = limpar(item.fazenda);
       const qdr = limpar(item.quadra);
       const ramal = limpar(item.ramal);
       const pes = item.total_pes || 0;
+
+      somaResumoLocal += pes; // 🟢 SOMA GERAL FEITA AQUI SEM CUSTO EXTRA
 
       if (!dic[faz]) dic[faz] = { total: 0, quadras: {} };
       dic[faz].total += pes;
@@ -204,6 +212,7 @@ export default function MapaScreen() {
       }
     });
 
+    setTotalGeralResumo(somaResumoLocal); // 🟢 SETA O TOTAL PARA A TELA
     setDicionario(dic);
     setFazendasDisponiveis(Object.keys(dic).sort());
 
@@ -213,7 +222,7 @@ export default function MapaScreen() {
       quadras: Object.keys(dic[faz].quadras).map(qdr => ({
         quadra: qdr,
         total: dic[faz].quadras[qdr].total
-      })).sort((a, b) => a.quadra.localeCompare(b.quadra))
+      })).sort((a, b) => a.quadra.localeCompare(b.quadra, undefined, { numeric: true })) // 🟢 ORDENAÇÃO NUMÉRICA NO RESUMO
     })).sort((a, b) => a.fazenda.localeCompare(b.fazenda));
 
     setListaResumo(resumo);
@@ -227,10 +236,11 @@ export default function MapaScreen() {
     setCarregando(true);
 
     try {
-      let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').eq('fazenda', buscaFazenda);
+      // 🟢 IGNORANDO CASE SENSITIVE NA BUSCA (ilike)
+      let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').ilike('fazenda', buscaFazenda);
       
-      if (buscaQuadra) query = query.eq('quadra', buscaQuadra);
-      if (buscaRamal) query = query.eq('ramal', buscaRamal);
+      if (buscaQuadra) query = query.ilike('quadra', buscaQuadra);
+      if (buscaRamal) query = query.ilike('ramal', buscaRamal);
 
       const { data, error } = await query.limit(3000);
         
@@ -253,9 +263,9 @@ export default function MapaScreen() {
       if (mapaOffline) {
         let dadosOff = JSON.parse(mapaOffline);
         
-        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => i.fazenda === buscaFazenda);
-        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => i.quadra === buscaQuadra);
-        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => String(i.ramal) === String(buscaRamal));
+        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => i.fazenda.toUpperCase() === buscaFazenda.toUpperCase());
+        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => i.quadra.toUpperCase() === buscaQuadra.toUpperCase());
+        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => String(i.ramal).toUpperCase() === String(buscaRamal).toUpperCase());
 
         if (dadosOff.length > 0) {
           setDadosBrutos(dadosOff);
@@ -277,14 +287,22 @@ export default function MapaScreen() {
   const processarDadosMapa = (data: any[]) => {
     let somaGeral = 0;
     const agrupamento: any = {};
-    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ') : 'N/A';
+    // 🟢 CORREÇÃO: Forçando .toUpperCase() também no detalhamento
+    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
+    // 🟢 CORREÇÃO DA ORDENAÇÃO NUMÉRICA DO RESULTADO E PDF
     const dadosOrdenados = [...data].sort((a, b) => {
-      if (limpar(a.fazenda) < limpar(b.fazenda)) return -1;
-      if (limpar(a.fazenda) > limpar(b.fazenda)) return 1;
-      if (limpar(a.quadra) < limpar(b.quadra)) return -1;
-      if (limpar(a.quadra) > limpar(b.quadra)) return 1;
-      return (parseInt(a.ramal) || 0) - (parseInt(b.ramal) || 0);
+      const fazA = limpar(a.fazenda);
+      const fazB = limpar(b.fazenda);
+      if (fazA !== fazB) return fazA.localeCompare(fazB);
+
+      const qdrA = limpar(a.quadra);
+      const qdrB = limpar(b.quadra);
+      if (qdrA !== qdrB) return qdrA.localeCompare(qdrB, undefined, { numeric: true });
+
+      const ramA = limpar(a.ramal);
+      const ramB = limpar(b.ramal);
+      return ramA.localeCompare(ramB, undefined, { numeric: true });
     });
 
     dadosOrdenados.forEach((item) => {
@@ -425,7 +443,7 @@ export default function MapaScreen() {
             ${htmlTabelas}
 
             <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #95A5A6;">
-              Documento gerado pelo sistema Resinas Abud
+              Documento gerado pelo sistema Production System
             </div>
           </body>
         </html>
@@ -572,6 +590,13 @@ export default function MapaScreen() {
 
       {abaAtiva === 'resumo' && (
         <View style={styles.flex1}>
+          {/* 🟢 TOTAL GERAL DISCRETO EXIBIDO AQUI */}
+          {!carregando && listaResumo.length > 0 && (
+            <Text style={styles.textoTotalResumo}>
+              🌳 Total Geral Cadastrado: {totalGeralResumo.toLocaleString('pt-BR')} pés
+            </Text>
+          )}
+
           {carregando ? (
             <ActivityIndicator size="large" color="#27AE60" style={styles.loaderMargin} />
           ) : listaResumo.length === 0 ? (
@@ -722,6 +747,10 @@ const styles = StyleSheet.create({
   flex1: { flex: 1 },
   loaderMargin: { marginTop: 30 },
   textoVazio: { textAlign: 'center', color: '#7F8C8D', marginTop: 20 },
+  
+  // 🟢 ESTILO NOVO: TEXTO TOTAL DISCRETO
+  textoTotalResumo: { textAlign: 'right', color: '#95A5A6', fontSize: 12, fontStyle: 'italic', marginBottom: 8, marginRight: 5 },
+  
   listaPaddingBottom: { paddingBottom: 50 },
   listaPadding: { paddingBottom: 50, paddingTop: 10 },
   flex1MargemDireita: { flex: 1, marginRight: 10 },

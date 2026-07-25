@@ -111,7 +111,7 @@ export default function DrawerLayout() {
         drawerActiveTintColor: '#FFF',
         drawerInactiveTintColor: '#34495E',
         drawerLabelStyle: { 
-          fontSize: 16, 
+          fontSize: 15, 
           fontWeight: 'bold',
           textTransform: 'capitalize' 
         },
@@ -128,7 +128,6 @@ export default function DrawerLayout() {
         }}
       />
 
-      {/* 👇 NOVA TELA ADICIONADA AQUI 👇 */}
       <Drawer.Screen
         name="AcompanhamentoScreen"
         options={{
@@ -282,12 +281,46 @@ export default function DrawerLayout() {
       <Drawer.Screen
         name="relatorios"
         options={{
-          drawerLabel: 'Relatórios',
-          title: 'Relatórios',
+          drawerLabel: 'Relatórios Base',
+          title: 'Relatórios Base',
           drawerIcon: ({ color, size }) => <Ionicons name="document-attach" size={size} color={color} />,
           drawerItemStyle: ocultarVisul('relatorios')
         }}
       />
+
+      {/* 👇 NOVAS TELAS ADICIONADAS OFICIALMENTE E FORMATADAS 👇 */}
+      
+      <Drawer.Screen
+        name="relatorio-cargas"
+        options={{
+          drawerLabel: 'Relatório de Cargas',
+          title: 'Relatório de Cargas',
+          drawerIcon: ({ color, size }) => <MaterialCommunityIcons name="file-document-multiple-outline" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('relatorio-cargas')
+        }}
+      />
+
+      <Drawer.Screen
+        name="estrias-atrasadas"
+        options={{
+          drawerLabel: 'Estrias Atrasadas',
+          title: 'Estrias Atrasadas',
+          drawerIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('estrias-atrasadas')
+        }}
+      />
+
+      <Drawer.Screen
+        name="relatorio-financeiro"
+        options={{
+          drawerLabel: 'Relatório Financeiro',
+          title: 'Fechamento Financeiro',
+          drawerIcon: ({ color, size }) => <Ionicons name="cash-outline" size={size} color={color} />,
+          drawerItemStyle: ocultarVisul('relatorio-financeiro')
+        }}
+      />
+
+      {/* 👆 FIM DAS NOVAS TELAS 👆 */}
 
       <Drawer.Screen
         name="colaboradores"

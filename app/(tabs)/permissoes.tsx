@@ -10,7 +10,7 @@ export default function PermissoesScreen() {
 
   const [permissoes, setPermissoes] = useState<any>({});
 
-  // 👉 NOVO: Adicionado 'estoque' e 'alertas' na lista de permissões
+  // 👉 ATUALIZADO: Lista completa com TODAS as novas telas incluídas
   const nomesTelas = [
     { chave: 'estoque', nome: '📦 Estoque / Inventário' },
     { chave: 'carregamentos', nome: '🚛 Expedição / Romaneio' },
@@ -24,10 +24,15 @@ export default function PermissoesScreen() {
     { chave: 'suporte', nome: '🎧 Suporte Brekaz' },
     { chave: 'ausencias', nome: '❌ Ausências' },
     { chave: 'cadastros', nome: '📝 Cadastros' },
-    { chave: 'relatorios', nome: '📄 Relatórios' },
+    { chave: 'relatorios', nome: '📄 Relatórios Base' },
     { chave: 'colaboradores', nome: '🤝 Colaboradores' },
     { chave: 'retroativo', nome: '⏳ Lançamento Retroativo' },
-    { chave: 'AcompanhamentoScreen', nome: '📝 Acompanhamento Diário' }
+    { chave: 'AcompanhamentoScreen', nome: '📝 Acompanhamento Diário' },
+    
+    // 👇 NOVAS TELAS ADICIONADAS AQUI 👇
+    { chave: 'relatorio-cargas', nome: '📑 Relatório de Cargas' },
+    { chave: 'estrias-atrasadas', nome: '📅 Estrias Atrasadas' },
+    { chave: 'relatorio-financeiro', nome: '💵 Relatório Financeiro (Novo)' }
   ];
 
   useEffect(() => {
@@ -135,7 +140,7 @@ const styles = StyleSheet.create({
   pickerBox: { backgroundColor: '#F8F9FA', borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 8, marginBottom: 20 },
   listaTelas: { marginTop: 10 },
   itemTela: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#ECF0F1' },
-  nomeTela: { fontSize: 16, color: '#34495E', fontWeight: '500' },
+  nomeTela: { fontSize: 15, color: '#34495E', fontWeight: 'bold' },
   btnSalvar: { backgroundColor: '#2980B9', padding: 15, borderRadius: 10, marginTop: 30, alignItems: 'center' },
   btnSalvarTxt: { color: '#FFF', fontWeight: 'bold', fontSize: 16 }
 });
