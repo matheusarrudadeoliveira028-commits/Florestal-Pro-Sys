@@ -360,7 +360,6 @@ export default function RelatoriosScreen() {
         const folha = agrupado[chave];
         
         const totalGeral = folha.registros.reduce((soma: number, item: any) => soma + (item.valor_total || 0), 0);
-        const totalQuantidade = folha.registros.reduce((soma: number, item: any) => soma + (Number(item.quantidade) || 0), 0);
         
         // Puxa o nome do fiscal da seleção ou do primeiro registro
         const encarregadoNome = folha.registros.length > 0 && folha.registros[0].fiscal_nome 
@@ -505,11 +504,6 @@ export default function RelatoriosScreen() {
               </thead>
               <tbody>
                 ${linhasTabela}
-                <tr>
-                  <td colspan="5" style="text-align: right; font-weight: bold; background-color: #E8E8E8;">QUANTIDADE TOTAL:</td>
-                  <td style="font-weight: bold; background-color: #E8E8E8; font-size: 13px;">${totalQuantidade}</td>
-                  <td colspan="2" style="background-color: #E8E8E8;"></td>
-                </tr>
               </tbody>
             </table>
 
@@ -555,7 +549,7 @@ export default function RelatoriosScreen() {
               .header-left { flex: 1; }
               .header-left p, .header-right p { margin: 4px 0; font-size: 13px; }
               .header-right { text-align: right; background-color: #F8F9F9; padding: 10px 15px; border-radius: 8px; border: 1px solid #E5E8E8; }
-              table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+              <table> { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
               th, td { border: 1px solid #000; padding: 5px 4px; text-align: center; font-size: 11px; }
               th { background-color: #E8E8E8; font-weight: bold; text-transform: uppercase; font-size: 10px; }
               tr:nth-child(even) { background-color: #F9F9F9; }
