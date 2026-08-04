@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
@@ -7,18 +8,10 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase'; // Ajuste o caminho se necessário
 
-// 👉 ALGORITMO OFFLINE DE FERIADOS NACIONAIS (Fixos + Móveis como Páscoa e Carnaval)
+// 👉 ALGORITMO OFFLINE DE FERIADOS NACIONAIS
 const obterFeriadosNacionais = (ano: number) => {
   const feriados = [
-    '01/01', // Confraternização Universal
-    '21/04', // Tiradentes
-    '01/05', // Dia do Trabalhador
-    '07/09', // Independência do Brasil
-    '12/10', // Nossa Senhora Aparecida
-    '02/11', // Finados
-    '15/11', // Proclamação da República
-    '20/11', // Consciência Negra
-    '25/12'  // Natal
+    '01/01', '21/04', '01/05', '07/09', '12/10', '02/11', '15/11', '20/11', '25/12'
   ];
 
   const a = ano % 19;
@@ -57,25 +50,24 @@ export default function RelatoriosScreen() {
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState('TODOS');
   const [fiscalSelecionado, setFiscalSelecionado] = useState('TODOS');
   
-  // 🟢 ESTADOS PARA CONTROLE DE PERFIL
   const [perfilUsuario, setPerfilUsuario] = useState('ADMIN'); 
   const [carregandoPerfil, setCarregandoPerfil] = useState(true);
 
-  // DATAS E FERIADOS
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [feriados, setFeriados] = useState('');
   const [filtroAtivo, setFiltroAtivo] = useState('');
+  
+  // 🟢 ESTADO: VALOR DO ATESTADO
+  const [valorAtestado, setValorAtestado] = useState('');
 
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
-  // 🟢 ESTADO PARA LISTA FILTRADA DE COLABORADORES
   const [listaColaboradoresFiltrada, setListaColaboradoresFiltrada] = useState<any[]>([]);
   const [listaFiscais, setListaFiscais] = useState<string[]>([]);
   
   const [gerando, setGerando] = useState(false);
   const [carregando, setCarregando] = useState(true);
 
-  // 🟢 FUNÇÕES UTILITÁRIAS
   const limparNome = (nome: string) => {
     if (!nome) return '';
     return nome.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
@@ -96,34 +88,29 @@ export default function RelatoriosScreen() {
     return `${y}-${m}-${d}`;
   };
 
-  const extrairAdmissaoISO = (admStr: any) => {
-    if (!admStr) return null;
-    let limpa = String(admStr).split('T')[0].split(' ')[0].trim();
-    let a = 0, m = 0, d = 0;
-    if (limpa.includes('/')) {
-      const p = limpa.split('/');
+  const padronizarDataDoBanco = (dataLanc: string) => {
+    if (!dataLanc) return '';
+    let d = String(dataLanc).split('T')[0].split(' ')[0].trim();
+    if (d.includes('/')) {
+      const p = d.split('/');
       if (p.length === 3) {
-          if (p[2].length >= 4) { a = parseInt(p[2], 10); m = parseInt(p[1], 10); d = parseInt(p[0], 10); }
-          else { a = parseInt(p[0], 10); m = parseInt(p[1], 10); d = parseInt(p[2], 10); }
+        if (p[2].length >= 4) return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+        else return `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
       }
-    } else if (limpa.includes('-')) {
-       const p = limpa.split('-');
-       if (p.length === 3) {
-           if (p[0].length >= 4) { a = parseInt(p[0], 10); m = parseInt(p[1], 10); d = parseInt(p[2], 10); }
-           else { a = parseInt(p[2], 10); m = parseInt(p[1], 10); d = parseInt(p[0], 10); }
-       }
     }
-    if (a > 0 && m > 0 && d > 0 && !isNaN(a) && !isNaN(m) && !isNaN(d)) {
-       if (a < 100) a += 2000;
-       return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    }
-    return null;
+    return d;
+  };
+
+  const extrairAdmissaoISO = (admStr: any) => {
+    const limpa = padronizarDataDoBanco(admStr);
+    return limpa || null;
   };
 
   useEffect(() => {
     carregarPerfilUsuario(); 
     carregarColaboradores();
     carregarFiscais();
+    carregarConfiguracoesLocais();
     
     const hoje = new Date();
     if (hoje.getDate() <= 15) {
@@ -133,17 +120,17 @@ export default function RelatoriosScreen() {
     }
   }, []);
 
-  // 🟢 EFEITO QUE FILTRA OS COLABORADORES QUANDO O FISCAL MUDA
   useEffect(() => {
     const atualizarListaColaboradores = async () => {
       if (fiscalSelecionado === 'TODOS') {
         setListaColaboradoresFiltrada(listaColaboradores);
       } else {
-        // Busca em TODO o histórico quem já fez parte da equipe deste fiscal
         const { data } = await supabase
           .from('diarios_campo')
           .select('colaborador')
-          .eq('fiscal_nome', fiscalSelecionado);
+          .eq('fiscal_nome', fiscalSelecionado)
+          .order('data', { ascending: false })
+          .limit(3000); 
 
         if (data) {
           const nomesDaEquipeLimpos = [...new Set(data.map(item => limparNome(item.colaborador)).filter(Boolean))];
@@ -161,7 +148,26 @@ export default function RelatoriosScreen() {
     }
   }, [fiscalSelecionado, listaColaboradores]);
 
-  // 🟢 FUNÇÃO PARA BUSCAR O USUÁRIO LOGADO E VERIFICAR SE É FISCAL DE CAMPO
+  const salvarValorAtestado = async (texto: string) => {
+    setValorAtestado(texto);
+    try {
+      await AsyncStorage.setItem('@valor_atestado', texto);
+    } catch (e) {
+      console.warn('Erro ao salvar valor do atestado.');
+    }
+  };
+
+  const carregarConfiguracoesLocais = async () => {
+    try {
+      const valor = await AsyncStorage.getItem('@valor_atestado');
+      if (valor !== null) {
+        setValorAtestado(valor);
+      }
+    } catch (e) {
+      console.warn('Erro ao carregar configurações.');
+    }
+  };
+
   const carregarPerfilUsuario = async () => {
     setCarregandoPerfil(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -175,8 +181,6 @@ export default function RelatoriosScreen() {
 
       if (usuarioData) {
         setPerfilUsuario(usuarioData.cargo);
-        
-        // Se o cargo for "Fiscal de Campo", trava o select no nome dele
         if (usuarioData.cargo === 'Fiscal de Campo') {
           setFiscalSelecionado(usuarioData.nome);
         }
@@ -272,14 +276,18 @@ export default function RelatoriosScreen() {
       let query = supabase.from('diarios_campo').select('*')
         .gte('data', `${dtInicioBD} 00:00:00`)
         .lte('data', `${dtFimBD} 23:59:59`)
-        .order('data', { ascending: true });
-
-      if (fiscalSelecionado !== 'TODOS') {
-        query = query.eq('fiscal_nome', fiscalSelecionado);
-      }
+        .order('data', { ascending: true })
+        .limit(5000); 
 
       if (colaboradorSelecionado !== 'TODOS') {
         query = query.eq('colaborador', colaboradorSelecionado);
+      } else if (fiscalSelecionado !== 'TODOS') {
+        const nomesEquipe = listaColaboradoresFiltrada.map(c => c.nome);
+        if (nomesEquipe.length > 0) {
+          query = query.in('colaborador', nomesEquipe);
+        } else {
+          query = query.eq('fiscal_nome', fiscalSelecionado);
+        }
       }
 
       const { data: lancamentosData, error: errLanc } = await query;
@@ -287,7 +295,6 @@ export default function RelatoriosScreen() {
 
       const lancamentos = lancamentosData || [];
 
-      // Se não encontrou lançamento e a pesquisa foi para TODOS sem especificar fiscal, aborta.
       if (lancamentos.length === 0 && colaboradorSelecionado === 'TODOS' && fiscalSelecionado === 'TODOS') {
         setGerando(false);
         return Alert.alert('Aviso', 'Nenhum lançamento encontrado para este período.');
@@ -296,7 +303,7 @@ export default function RelatoriosScreen() {
       const { data: feriasDB } = await supabase.from('ferias').select('*');
 
       const estaDeFerias = (nome: string, dataLancamento: string) => {
-        const dataFormatada = dataLancamento.split('T')[0];
+        const dataFormatada = padronizarDataDoBanco(dataLancamento);
         return feriasDB?.some(f => 
           f.colaborador_nome === nome && 
           dataFormatada >= f.data_inicio && 
@@ -319,9 +326,6 @@ export default function RelatoriosScreen() {
         return acc;
       }, {});
 
-      // 🟢 O PULO DO GATO APRIMORADO:
-      // Se selecionou uma equipe (Fiscal) e TODOS os colaboradores, varre a lista da equipe inteira
-      // e cria folhas vazias para quem faltou todos os dias!
       if (fiscalSelecionado !== 'TODOS' && colaboradorSelecionado === 'TODOS') {
         listaColaboradoresFiltrada.forEach(colab => {
           const nomeLimpo = limparNome(colab.nome);
@@ -336,7 +340,6 @@ export default function RelatoriosScreen() {
           }
         });
       } else if (colaboradorSelecionado !== 'TODOS') {
-        // Se escolheu um colaborador específico que não tem produção, cria folha vazia
         const temFolha = Object.keys(agrupado).some(chave => agrupado[chave].nome === colaboradorSelecionado);
         if (!temFolha) {
           agrupado[`${colaboradorSelecionado}_Registrado`] = {
@@ -359,9 +362,8 @@ export default function RelatoriosScreen() {
       chavesFolhas.forEach((chave, index) => {
         const folha = agrupado[chave];
         
-        const totalGeral = folha.registros.reduce((soma: number, item: any) => soma + (item.valor_total || 0), 0);
+        let totalGeral = 0;
         
-        // Puxa o nome do fiscal da seleção ou do primeiro registro
         const encarregadoNome = folha.registros.length > 0 && folha.registros[0].fiscal_nome 
             ? folha.registros[0].fiscal_nome 
             : (fiscalSelecionado !== 'TODOS' ? fiscalSelecionado : 'Não Identificado');
@@ -390,17 +392,37 @@ export default function RelatoriosScreen() {
           const isoDate = formatarDataIso(dataAtualLoop);
           const diaDaSemana = dataAtualLoop.getDay(); 
           const diaMesStr = isoDate.split('-')[2];
+          const diaMesNum = parseInt(diaMesStr, 10);
 
-          const registrosDoDia = folha.registros.filter((r: any) => r.data.startsWith(isoDate));
+          const registrosDoDia = folha.registros.filter((r: any) => {
+            const dataLancamento = padronizarDataDoBanco(r.data);
+            const isAtestado = r.servico && r.servico.toUpperCase().includes('ATESTADO');
+            return dataLancamento === isoDate && !isAtestado;
+          });
+
+          const atestadoVigente = folha.registros.find((r: any) => {
+            const isAtestado = r.servico && r.servico.toUpperCase().includes('ATESTADO');
+            if (!isAtestado) return false;
+
+            const dataInicioAtestado = padronizarDataDoBanco(r.data_atestado || r.data);
+            if (!dataInicioAtestado) return false;
+
+            const dias = parseInt(r.dias_atestado, 10) || 1;
+            
+            const pIniAtestado = dataInicioAtestado.split('-');
+            const dtFimAtestado = new Date(parseInt(pIniAtestado[0], 10), parseInt(pIniAtestado[1], 10) - 1, parseInt(pIniAtestado[2], 10));
+            dtFimAtestado.setDate(dtFimAtestado.getDate() + dias - 1); 
+            
+            const dataFimAtestadoStr = formatarDataIso(dtFimAtestado);
+
+            return isoDate >= dataInicioAtestado && isoDate <= dataFimAtestadoStr;
+          });
 
           if (registrosDoDia.length > 0) {
-            // 👉 ALGORITMO DE AGRUPAMENTO
-            // Agrupa os lançamentos por Serviço, Fazenda, Quadra e Valor Unitário
             const registrosAgrupados = registrosDoDia.reduce((acc: any, item: any) => {
               const chave = `${item.servico}_${item.fazenda}_${item.quadra}_${item.valor_unitario}`;
               
               if (!acc[chave]) {
-                // Se ainda não existe esse agrupamento no dia, cria o primeiro registro
                 acc[chave] = {
                   ...item,
                   quantidade: Number(item.quantidade) || 0,
@@ -408,7 +430,6 @@ export default function RelatoriosScreen() {
                   ramais: item.ramal ? [String(item.ramal)] : []
                 };
               } else {
-                // Se já existe, apenas soma a quantidade e o valor, e adiciona o ramal à lista
                 acc[chave].quantidade += Number(item.quantidade) || 0;
                 acc[chave].valor_total += Number(item.valor_total) || 0;
                 if (item.ramal) {
@@ -418,15 +439,15 @@ export default function RelatoriosScreen() {
               return acc;
             }, {});
 
-            // 👉 GERAÇÃO DAS LINHAS HTML AGRUPADAS
             Object.values(registrosAgrupados).forEach((item: any) => {
-              // Remove ramais duplicados e formata com vírgula
               const ramaisUnicos = [...new Set(item.ramais)];
               const ramaisStr = ramaisUnicos.join(', ') || '-'; 
               
               const valorUni = item.valor_unitario ? item.valor_unitario.toFixed(4).replace('.', ',') : '0,00';
               const valorTot = item.valor_total ? item.valor_total.toFixed(2).replace('.', ',') : '0,00';
               
+              totalGeral += (item.valor_total || 0);
+
               linhasTabela += `
                 <tr>
                   <td>${diaMesStr}</td>
@@ -455,13 +476,35 @@ export default function RelatoriosScreen() {
             
             if (isAntesAdmissao) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #F4F6F6;"></td></tr>`;
+            } else if (diaDaSemana === 0) { 
+              linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EAEDED; color: #7F8C8D; font-weight: bold; letter-spacing: 2px;">DOMINGO</td></tr>`;
             } else if (isFerias) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FEF9E7; color: #F39C12; font-weight: bold; letter-spacing: 2px;">FÉRIAS</td></tr>`;
+            } else if (atestadoVigente) { 
+              let valorDiaAtestado = 0;
+              
+              if (diaMesNum <= 15) {
+                valorDiaAtestado = parseFloat(valorAtestado.replace(',', '.')) || 0;
+              }
+
+              totalGeral += valorDiaAtestado;
+
+              if (valorDiaAtestado > 0) {
+                const valorAtdStr = valorDiaAtestado.toFixed(2).replace('.', ',');
+                linhasTabela += `
+                  <tr>
+                    <td><strong>${diaMesStr}</strong></td>
+                    <td colspan="5" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">ATESTADO</td>
+                    <td style="background-color: #D6EAF8; color: #2980B9;">${valorAtdStr}</td>
+                    <td style="background-color: #D6EAF8; color: #2980B9; font-weight: bold;">R$ ${valorAtdStr}</td>
+                  </tr>`;
+              } else {
+                linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">ATESTADO</td></tr>`;
+              }
+
             } else if (isFeriado) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FADBD8; color: #C0392B; font-weight: bold; letter-spacing: 2px;">FERIADO</td></tr>`;
-            } else if (diaDaSemana === 0) {
-              linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EAEDED; color: #7F8C8D; font-weight: bold; letter-spacing: 2px;">DOMINGO</td></tr>`;
-            } else if (diaDaSemana === 6) {
+            } else if (diaDaSemana === 6) { 
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EBF5FB; color: #2980B9; font-weight: bold; letter-spacing: 2px;">SÁBADO</td></tr>`;
             } else {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FDEDEC; color: #E74C3C; font-weight: bold; letter-spacing: 2px;">FALTA</td></tr>`;
@@ -472,7 +515,6 @@ export default function RelatoriosScreen() {
 
         const pagina = `
           <div class="page-container">
-            <!-- CABEÇALHO NOVO E LIMPO (SEM ENDEREÇO, COM FISCAL) -->
             <div class="header-container">
               ${base64Logo ? `<div class="header-logo"><img src="${base64Logo}" alt="Logo" /></div>` : ''}
               <div class="header-left">
@@ -482,7 +524,6 @@ export default function RelatoriosScreen() {
                 ${folha.tipo === 'Registrado' ? '' : `<p>Produção: <strong style="color: #E74C3C; text-transform: uppercase;">${folha.tipo}</strong></p>`}
               </div>
               
-              <!-- 🟢 ÁREA DO FISCAL NO LADO DIREITO -->
               <div class="header-right">
                 <p style="color: #555; font-size: 11px;">Fiscal / Encarregado</p>
                 <p><strong style="font-size: 15px; text-transform: uppercase; color: #2C3E50;">${encarregadoNome}</strong></p>
@@ -507,7 +548,6 @@ export default function RelatoriosScreen() {
               </tbody>
             </table>
 
-            <!-- RECIBO OFICIAL -->
             <table style="width: 100%; border-collapse: collapse; margin-top: 30px; border: 1px solid #000;">
               <tr>
                 <td style="text-align: center; font-weight: bold; font-size: 16px; padding: 6px; border-bottom: 1px solid #000;">RECIBO</td>
@@ -521,7 +561,6 @@ export default function RelatoriosScreen() {
               </tr>
             </table>
 
-            <!-- ÁREA DE ASSINATURA -->
             <div class="signature-area">
               <hr style="width: 350px; border: 1px solid #000; margin-bottom: 5px;">
               <p style="font-size: 14px; font-weight: bold; text-transform: uppercase;">${folha.nome}</p>
@@ -549,7 +588,7 @@ export default function RelatoriosScreen() {
               .header-left { flex: 1; }
               .header-left p, .header-right p { margin: 4px 0; font-size: 13px; }
               .header-right { text-align: right; background-color: #F8F9F9; padding: 10px 15px; border-radius: 8px; border: 1px solid #E5E8E8; }
-              <table> { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+              table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
               th, td { border: 1px solid #000; padding: 5px 4px; text-align: center; font-size: 11px; }
               th { background-color: #E8E8E8; font-weight: bold; text-transform: uppercase; font-size: 10px; }
               tr:nth-child(even) { background-color: #F9F9F9; }
@@ -562,7 +601,6 @@ export default function RelatoriosScreen() {
         </html>
       `;
 
-      // BIFURCAÇÃO PERFEITA WEB x MOBILE
       if (Platform.OS === 'web') {
         const iframe = document.createElement('iframe');
         iframe.style.position = 'absolute';
@@ -609,7 +647,6 @@ export default function RelatoriosScreen() {
 
       <View style={styles.card}>
         
-        {/* 👉 BOTÕES DE QUINZENA RÁPIDA */}
         <Text style={styles.label}>Período de Fechamento:</Text>
         <View style={styles.botoesQuinzena}>
           <TouchableOpacity 
@@ -645,6 +682,20 @@ export default function RelatoriosScreen() {
           </View>
         </View>
 
+        {/* 🟢 RENDERIZAÇÃO CONDICIONAL: SOME NA 2ª QUINZENA */}
+        {filtroAtivo !== '2Q' && (
+          <>
+            <Text style={styles.label}>Valor da Diária de Atestado (1ª Quinzena):</Text>
+            <TextInput 
+              style={styles.input} 
+              value={valorAtestado} 
+              onChangeText={salvarValorAtestado} 
+              placeholder="Ex: 50,00" 
+              keyboardType="numeric" 
+            />
+          </>
+        )}
+
         <Text style={styles.label}>Selecione o Fiscal / Encarregado:</Text>
         {carregando || carregandoPerfil ? (
           <ActivityIndicator color="#2980B9" />
@@ -670,7 +721,6 @@ export default function RelatoriosScreen() {
           <ActivityIndicator color="#2980B9" />
         ) : (
           <View style={styles.pickerContainer}>
-            {/* 🟢 LISTA EXIBE APENAS OS COLABORADORES DA EQUIPE FILTRADA */}
             <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado} style={styles.picker}>
               <Picker.Item label="👉 TODOS OS COLABORADORES" value="TODOS" />
               {listaColaboradoresFiltrada.map((item) => (
