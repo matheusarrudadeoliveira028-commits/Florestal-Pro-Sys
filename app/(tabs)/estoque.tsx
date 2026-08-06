@@ -152,11 +152,11 @@ export default function EstoqueDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [totalGlobal, setTotalGlobal] = useState(0);
 
-  // 🟢 Estados para o Filtro de Data
+  // Estados para o Filtro de Data
   const [dataInicial, setDataInicial] = useState('');
   const [dataFinal, setDataFinal] = useState('');
 
-  // Estados para o Modal de Estoque Anterior
+  // Estados para Modais
   const [modalAnteriorVisivel, setModalAnteriorVisivel] = useState(false);
   const [listaFazendas, setListaFazendas] = useState<string[]>([]);
   const [fazendaAnterior, setFazendaAnterior] = useState('');
@@ -164,7 +164,6 @@ export default function EstoqueDashboard() {
   const [quantidadeAnterior, setQuantidadeAnterior] = useState('');
   const [salvandoAnterior, setSalvandoAnterior] = useState(false);
 
-  // Estados para o Modal de BAIXA DE ESTOQUE (Perdas)
   const [modalBaixaVisivel, setModalBaixaVisivel] = useState(false);
   const [fazendaBaixa, setFazendaBaixa] = useState('');
   const [resinaBaixa, setResinaBaixa] = useState('ELLIOTTI');
@@ -185,6 +184,16 @@ export default function EstoqueDashboard() {
     const partes = dataBR.split('/');
     if (partes.length === 3) return `${partes[2]}-${partes[1]}-${partes[0]}`;
     return null;
+  };
+
+  const normalizarData = (dataStr: string) => {
+    if (!dataStr) return '2000-01-02';
+    let limpa = String(dataStr).trim();
+    if (limpa.includes('/')) {
+      const partes = limpa.split(' ')[0].split('/');
+      if (partes.length === 3) return `${partes[2]}-${partes[1]}-${partes[0]}`;
+    }
+    return limpa.substring(0, 10);
   };
 
   const carregarEstoque = async () => {
@@ -209,24 +218,15 @@ export default function EstoqueDashboard() {
         const key = `${fz}|${res}`;
         if (!mapaEstoque[key]) {
           mapaEstoque[key] = { 
-            fazenda: fz, 
-            resina: res, 
-            entradas: 0, 
-            anterior: 0, 
-            saidas: 0, 
-            baixas: 0, 
-            saldo: 0, 
-            historicoEntradas: [], 
-            historicoSaidas: [] 
+            fazenda: fz, resina: res, entradas: 0, anterior: 0, 
+            saidas: 0, baixas: 0, saldo: 0, historicoEntradas: [], historicoSaidas: [] 
           };
         }
         return key;
       };
 
-      // 🟢 PROCESSAMENTO INTELIGENTE DE DATAS
       const dataIniBD = converterDataParaBanco(dataInicial) || '2000-01-01';
       const dataFimBD = converterDataParaBanco(dataFinal) || '2100-12-31';
-
       const dtIniObj = new Date(`${dataIniBD}T00:00:00Z`);
       const dtFimObj = new Date(`${dataFimBD}T23:59:59Z`);
 
@@ -251,17 +251,15 @@ export default function EstoqueDashboard() {
           const key = inicializarChave(fz, res);
           const qtd = Number(item.quantidade) || 0;
 
-          const dataItem = item.data || item.created_at;
-          const dataItemObj = dataItem ? new Date(`${dataItem.split('T')[0]}T12:00:00Z`) : new Date('2000-01-02T12:00:00Z');
+          const dataItemStr = normalizarData(item.data || item.created_at);
+          const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
 
           if (dataItemObj < dtIniObj) {
-            // Aconteceu antes da data filtrada: vai para o Estoque Anterior
             mapaEstoque[key].anterior += qtd;
           } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
-            // Aconteceu dentro do período: entra nos coletados e histórico
             mapaEstoque[key].entradas += qtd;
             mapaEstoque[key].historicoEntradas.push({
-              data: dataItem,
+              data: dataItemStr,
               colaborador: item.colaborador || 'Não Identificado',
               quantidade: qtd
             });
@@ -270,27 +268,23 @@ export default function EstoqueDashboard() {
       });
 
       (saidas || []).forEach((item) => {
-        const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
-        
-        let res = item.variedade;
-        if (res) {
-          res = String(res).trim().toUpperCase();
-        } else {
-          res = 'INDEFINIDA';
-        }
+        // 🟢 REGRA ADICIONADA: Ignora completamente os carregamentos de Madeira!
+        if (item.tipo_carga && String(item.tipo_carga).toUpperCase() === 'MADEIRA') return;
 
+        const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
+        let res = item.variedade ? String(item.variedade).trim().toUpperCase() : 'INDEFINIDA';
         const key = inicializarChave(fz, res);
         const qtd = Number(item.quantidade) || 0;
         
-        const dataItem = item.data_saida || item.data || item.created_at;
-        const dataItemObj = dataItem ? new Date(`${dataItem.split('T')[0]}T12:00:00Z`) : new Date('2000-01-02T12:00:00Z');
+        const dataItemStr = normalizarData(item.data_saida || item.data || item.created_at);
+        const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
 
         if (dataItemObj < dtIniObj) {
             mapaEstoque[key].anterior -= qtd;
         } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
             mapaEstoque[key].saidas += qtd;
             mapaEstoque[key].historicoSaidas.push({
-              data: dataItem,
+              data: dataItemStr,
               romaneio: item.numero_romaneio || item.romaneio || item.nf || item.placa || item.id || 'N/A',
               quantidade: qtd
             });
@@ -303,8 +297,8 @@ export default function EstoqueDashboard() {
         const key = inicializarChave(fz, res);
         const qtd = Number(item.quantidade) || 0;
 
-        const dataItem = item.created_at || item.data;
-        const dataItemObj = dataItem ? new Date(`${dataItem.split('T')[0]}T12:00:00Z`) : new Date('2000-01-02T12:00:00Z');
+        const dataItemStr = normalizarData(item.created_at || item.data);
+        const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
 
         if (dataItemObj < dtIniObj) {
             mapaEstoque[key].anterior -= qtd;
@@ -331,12 +325,15 @@ export default function EstoqueDashboard() {
         return { ...item, saldo };
       });
 
-      resultadoFinal.sort((a, b) => {
+      // 🟢 Oculta os cartões que não tiveram nenhuma movimentação e saldo zero (pra limpar a tela)
+      const estoqueLimpo = resultadoFinal.filter(i => i.saldo !== 0 || i.entradas !== 0 || i.saidas !== 0 || i.baixas !== 0 || i.anterior !== 0);
+
+      estoqueLimpo.sort((a, b) => {
         if (a.fazenda === b.fazenda) return b.saldo - a.saldo;
         return a.fazenda.localeCompare(b.fazenda);
       });
 
-      setEstoque(resultadoFinal);
+      setEstoque(estoqueLimpo);
       setTotalGlobal(total);
     } catch (error) {
       console.log('Erro ao calcular estoque:', error);
@@ -431,7 +428,6 @@ export default function EstoqueDashboard() {
         </TouchableOpacity>
       </View>
 
-      {/* 🟢 NOVO FILTRO DE DATA INJETADO SEM ALTERAR LAYOUT EXISTENTE */}
       <View style={styles.cardFiltros}>
         <Text style={styles.labelFiltro}>Pesquisar por Data (Deixe em branco para ver tudo):</Text>
         <View style={styles.rowFiltro}>
@@ -585,7 +581,6 @@ const styles = StyleSheet.create({
   
   botaoAtualizar: { backgroundColor: '#2980B9', flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 8, elevation: 2 },
   
-  // 🟢 ESTILOS DO NOVO FILTRO
   cardFiltros: { backgroundColor: '#FFF', padding: 15, borderRadius: 10, elevation: 2, marginBottom: 15, borderWidth: 1, borderColor: '#E0E6ED' },
   labelFiltro: { fontSize: 12, fontWeight: 'bold', color: '#7F8C8D', marginBottom: 8 },
   rowFiltro: { flexDirection: 'row', alignItems: 'center' },

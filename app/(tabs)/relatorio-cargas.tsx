@@ -9,7 +9,7 @@ import { supabase } from '../../src/supabase';
 
 export default function RelatorioCargasScreen() {
   const [fazendaSelecionada, setFazendaSelecionada] = useState('TODAS');
-  const [tipoCargaSelecionado, setTipoCargaSelecionado] = useState('TODAS'); // 🟢 NOVO FILTRO
+  const [tipoCargaSelecionado, setTipoCargaSelecionado] = useState('TODAS'); 
   const [listaFazendas, setListaFazendas] = useState<string[]>([]);
   
   const [dataInicial, setDataInicial] = useState('');
@@ -39,9 +39,9 @@ export default function RelatorioCargasScreen() {
 
   useEffect(() => {
     if (dataInicial.length === 10 && dataFinal.length === 10) {
-      buscarCargas();
+      buscarCargasEProducao();
     }
-  }, [dataInicial, dataFinal, fazendaSelecionada, tipoCargaSelecionado]); // 🟢 REAGE AO NOVO FILTRO
+  }, [dataInicial, dataFinal, fazendaSelecionada, tipoCargaSelecionado]); 
 
   const aplicarMascaraData = (texto: string, setFunction: React.Dispatch<React.SetStateAction<string>>) => {
     let v = texto.replace(/\D/g, ''); 
@@ -52,9 +52,19 @@ export default function RelatorioCargasScreen() {
   };
 
   const converterDataParaBanco = (dataBR: string) => {
+    if (!dataBR) return null;
     const partes = dataBR.split('/');
     if (partes.length === 3) return `${partes[2]}-${partes[1]}-${partes[0]}`;
     return null;
+  };
+
+  const extrairDataLocal = (dt: string) => {
+    if (!dt) return null;
+    if (dt.includes('/')) {
+      const parts = dt.split(' ')[0].split('/');
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    return dt.substring(0, 10);
   };
 
   const carregarFazendas = async () => {
@@ -65,7 +75,7 @@ export default function RelatorioCargasScreen() {
     }
   };
 
-  const buscarCargas = async () => {
+  const buscarCargasEProducao = async () => {
     const dataIniBD = converterDataParaBanco(dataInicial);
     const dataFimBD = converterDataParaBanco(dataFinal);
     
@@ -73,77 +83,194 @@ export default function RelatorioCargasScreen() {
 
     setCarregando(true);
     try {
-      let query = supabase
+      let queryCargas = supabase
         .from('carregamentos') 
         .select('*')
-        .gte('data_saida', `${dataIniBD}`) 
-        .lte('data_saida', `${dataFimBD} 23:59:59`) 
-        .order('data_saida', { ascending: true });
+        .gte('data_saida', `${dataIniBD} 00:00:00`) 
+        .lte('data_saida', `${dataFimBD} 23:59:59`);
 
+      let queryDiarios = supabase
+        .from('diarios_campo') 
+        .select('data, quadra, servico, quantidade, fazenda')
+        .gte('data', `${dataIniBD} 00:00:00`)
+        .lte('data', `${dataFimBD} 23:59:59`);
+        
       if (fazendaSelecionada !== 'TODAS') {
-        query = query.ilike('fazenda', fazendaSelecionada);
+        queryCargas = queryCargas.ilike('fazenda', `%${fazendaSelecionada}%`);
+        queryDiarios = queryDiarios.ilike('fazenda', `%${fazendaSelecionada}%`);
       }
-
-      // 🟢 APLICAÇÃO DO FILTRO DE CARGA NO BANCO
       if (tipoCargaSelecionado !== 'TODAS') {
-        query = query.eq('tipo_carga', tipoCargaSelecionado);
+        queryCargas = queryCargas.eq('tipo_carga', tipoCargaSelecionado);
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
+      // 1️⃣ FAZ TODAS AS BUSCAS AO MESMO TEMPO (Incluindo o passado para o Estoque Inicial)
+      const [
+        { data: dataCargas, error: errCargas },
+        { data: dataDiarios, error: errDiarios },
+        { data: pastEstoqueAnt },
+        { data: pastCargas },
+        { data: pastDiarios },
+        { data: pastBaixas }
+      ] = await Promise.all([
+        queryCargas,
+        queryDiarios,
+        supabase.from('estoque_anterior').select('quantidade, fazenda'),
+        supabase.from('carregamentos').select('quantidade, fazenda, tipo_carga').lt('data_saida', `${dataIniBD} 00:00:00`),
+        supabase.from('diarios_campo').select('quantidade, fazenda, servico').lt('data', `${dataIniBD} 00:00:00`),
+        supabase.from('baixas_estoque').select('quantidade, fazenda').lt('created_at', `${dataIniBD} 00:00:00`)
+      ]);
+      
+      if (errCargas) throw new Error(`Erro em Carregamentos: ${errCargas.message}`);
+      if (errDiarios) throw new Error(`Erro em Diários: ${errDiarios.message}`);
 
-      if (data && data.length > 0) {
-        const agrupamento = data.reduce((acc: any, item: any) => {
-          const fazenda = (item.fazenda || 'NÃO INFORMADA').toUpperCase();
+      // 2️⃣ CÁLCULO DO ESTOQUE ANTERIOR (Saldo Inicial no dia 01 do Filtro)
+      const saldoInicialPorFazenda: any = {};
+
+      pastEstoqueAnt?.forEach(item => {
+        const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+        saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) + (Number(item.quantidade) || 0);
+      });
+
+      pastDiarios?.forEach(item => {
+        const srv = String(item.servico || '').toUpperCase();
+        if (srv.includes('COLETA')) {
+          const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+          saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) + (Number(item.quantidade) || 0);
+        }
+      });
+
+      pastCargas?.forEach(item => {
+        if (item.tipo_carga !== 'Madeira') {
+          const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+          saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) - (Number(item.quantidade) || 0);
+        }
+      });
+
+      pastBaixas?.forEach(item => {
+        const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+        saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) - (Number(item.quantidade) || 0);
+      });
+
+      // 3️⃣ MAPEIA TUDO DO PERÍODO POR DIA E FAZENDA
+      const mapaFazendas: any = {};
+
+      if (dataDiarios) {
+        dataDiarios.forEach(d => {
+          const srv = String(d.servico || '').toUpperCase();
+          const isColeta = srv.includes('COLETA'); 
+          const isRemocao = srv.includes('REMOÇÃO') || srv.includes('REMOCAO'); 
           
-          if (!acc[fazenda]) {
-            acc[fazenda] = { cargas: [], total_peso: 0, total_tambores: 0, total_volume: 0 };
-          }
-          
-          const peso = Number(item.peso_liquido) || 0;
-          const tambores = Number(item.quantidade) || 0;
-          const volume = Number(item.madeira_volume) || 0; 
+          if (!isColeta && !isRemocao) return; 
 
-          acc[fazenda].cargas.push({
-            data: item.data_saida ? item.data_saida.split('T')[0] : '-',
-            romaneio: item.numero_romaneio || '-',
-            tipo_carga: item.tipo_carga || 'Goma Resina',
-            variedade: item.variedade || '-',
-            peso: peso,
-            tambores: tambores,
-            volume: volume,
-            media_tambor: tambores > 0 ? peso / tambores : 0,
-            observacao: item.observacao || ''
-          });
+          const dt = extrairDataLocal(d.data);
+          if (!dt) return;
 
-          acc[fazenda].total_peso += peso;
-          acc[fazenda].total_tambores += tambores;
-          acc[fazenda].total_volume += volume;
+          const f = (d.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+          if (!mapaFazendas[f]) mapaFazendas[f] = {};
+          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set(), totalColeta: 0, totalRemocao: 0, cargas: [] };
 
-          return acc;
-        }, {});
-
-        setDadosAgrupados(agrupamento);
-
-        let tPeso = 0; let tTambores = 0; let tCargas = 0; let tVolume = 0;
-        Object.keys(agrupamento).forEach(faz => {
-          tPeso += agrupamento[faz].total_peso;
-          tTambores += agrupamento[faz].total_tambores;
-          tVolume += agrupamento[faz].total_volume;
-          tCargas += agrupamento[faz].cargas.length;
+          if (d.quadra) mapaFazendas[f][dt].quadras.add(String(d.quadra));
+          if (isColeta && d.quantidade) mapaFazendas[f][dt].totalColeta += Number(d.quantidade);
+          if (isRemocao && d.quantidade) mapaFazendas[f][dt].totalRemocao += Number(d.quantidade);
         });
-
-        setTotalPesoGeral(tPeso);
-        setTotalTamboresGeral(tTambores);
-        setTotalCargasGeral(tCargas);
-        setTotalVolumeGeral(tVolume);
-
-      } else {
-        setDadosAgrupados({});
-        setTotalPesoGeral(0); setTotalTamboresGeral(0); setTotalCargasGeral(0); setTotalVolumeGeral(0);
       }
+
+      if (dataCargas) {
+        dataCargas.forEach(c => {
+          const dt = extrairDataLocal(c.data_saida);
+          if (!dt) return;
+
+          const f = (c.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+          if (!mapaFazendas[f]) mapaFazendas[f] = {};
+          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set(), totalColeta: 0, totalRemocao: 0, cargas: [] };
+
+          mapaFazendas[f][dt].cargas.push(c);
+        });
+      }
+
+      // 4️⃣ GERA A LISTA CRONOLÓGICA (COM O CÁLCULO DE ESTOQUE)
+      const agrupamento: any = {};
+      let tPeso = 0; let tTambores = 0; let tCargas = 0; let tVolume = 0;
+
+      Object.keys(mapaFazendas).forEach(faz => {
+        agrupamento[faz] = { linhas: [], total_peso: 0, total_tambores: 0, total_volume: 0, total_coleta: 0 };
+        
+        let saldoAtual = saldoInicialPorFazenda[faz] || 0; // Puxa o saldo do passado
+        const datas = Object.keys(mapaFazendas[faz]).sort();
+
+        datas.forEach(dt => {
+          const diaInfo = mapaFazendas[faz][dt];
+          const quadraStr = diaInfo.quadras.size > 0 ? Array.from(diaInfo.quadras).join(' / ') : '-';
+          const coletaStr = diaInfo.totalColeta > 0 ? diaInfo.totalColeta.toString() : '-';
+          const remocaoStr = diaInfo.totalRemocao > 0 ? diaInfo.totalRemocao.toString() : '-';
+
+          // A coleta entra no estoque do dia
+          saldoAtual += diaInfo.totalColeta;
+          agrupamento[faz].total_coleta += diaInfo.totalColeta;
+
+          if (diaInfo.cargas.length === 0) {
+            agrupamento[faz].linhas.push({
+              data: dt,
+              quadra: quadraStr,
+              coleta: coletaStr,
+              remocao: remocaoStr,
+              carregamento_qtd: '-',
+              estoque: saldoAtual, // Estoque atualizado!
+              romaneio: '-',
+              tipo_carga: '-',
+              variedade: '-',
+              peso: 0,
+              tambores: 0,
+              volume: 0,
+              media_tambor: 0
+            });
+          } else {
+            diaInfo.cargas.forEach((c: any, index: number) => {
+              const isMadeira = c.tipo_carga === 'Madeira';
+              const peso = Number(c.peso_liquido) || 0;
+              const tambores = isMadeira ? 0 : (Number(c.quantidade) || 0);
+              const volume = Number(c.madeira_volume) || 0;
+
+              // O Carregamento sai do estoque (apenas Goma Resina)
+              saldoAtual -= tambores;
+
+              agrupamento[faz].linhas.push({
+                data: dt,
+                quadra: index === 0 ? quadraStr : '"',
+                coleta: index === 0 ? coletaStr : '"', 
+                remocao: index === 0 ? remocaoStr : '"',
+                carregamento_qtd: isMadeira ? '-' : (tambores || '-'),
+                estoque: isMadeira ? '-' : saldoAtual, // Estoque atualizado após a carga!
+                romaneio: c.numero_romaneio || '-',
+                tipo_carga: c.tipo_carga || 'Goma Resina',
+                variedade: c.variedade || '-',
+                peso: peso,
+                tambores: tambores,
+                volume: volume,
+                media_tambor: tambores > 0 ? peso / tambores : 0
+              });
+
+              agrupamento[faz].total_peso += peso;
+              agrupamento[faz].total_tambores += tambores;
+              agrupamento[faz].total_volume += volume;
+              
+              tPeso += peso;
+              tTambores += tambores;
+              tVolume += volume;
+              tCargas++;
+            });
+          }
+        });
+      });
+
+      setDadosAgrupados(agrupamento);
+      setTotalPesoGeral(tPeso);
+      setTotalTamboresGeral(tTambores);
+      setTotalCargasGeral(tCargas);
+      setTotalVolumeGeral(tVolume);
+
     } catch (err: any) {
-      Alert.alert('Erro', 'Não foi possível carregar os carregamentos.');
+      Alert.alert('Detalhe do Erro', err.message);
     } finally {
       setCarregando(false);
     }
@@ -178,30 +305,32 @@ export default function RelatorioCargasScreen() {
       Object.keys(dadosAgrupados).sort().forEach(fazenda => {
         const dados = dadosAgrupados[fazenda];
 
-        const cargasResina = dados.cargas.filter((c:any) => c.tipo_carga !== 'Madeira');
-        const totalPesoResina = cargasResina.reduce((acc: number, curr: any) => acc + curr.peso, 0);
-        const mediaCarga = cargasResina.length > 0 ? (totalPesoResina / cargasResina.length) : 0;
+        const linhasComCarga = dados.linhas.filter((c:any) => c.tipo_carga !== '-' && c.tipo_carga !== 'Madeira');
+        const totalPesoResina = linhasComCarga.reduce((acc: number, curr: any) => acc + curr.peso, 0);
+        const mediaCarga = linhasComCarga.length > 0 ? (totalPesoResina / linhasComCarga.length) : 0;
 
         let linhasTabela = '';
-        dados.cargas.forEach((c: any) => {
+        dados.linhas.forEach((c: any) => {
           const dtBr = c.data !== '-' ? `${c.data.split('-')[2]}/${c.data.split('-')[1]}/${c.data.split('-')[0]}` : '-';
-          
-          const infoTotal = c.tipo_carga === 'Madeira' 
-            ? `<td style="color: #8E44AD; font-weight: bold;">${c.volume.toFixed(2).replace('.', ',')} m³</td>`
-            : `<td style="color: #E67E22; font-weight: bold;">${c.peso.toLocaleString('pt-BR')} kg</td>`;
-
-          const infoMedia = c.tipo_carga === 'Madeira'
-            ? `<td style="color: #95A5A6;">-</td>`
-            : `<td style="color: #27AE60; font-weight: bold;">${c.media_tambor > 0 ? c.media_tambor.toFixed(2).replace('.', ',') + ' kg' : '-'}</td>`;
+          const isMadeira = c.tipo_carga === 'Madeira';
+          const isVazio = c.tipo_carga === '-';
+            
+          const infoTotal = isVazio 
+            ? `<td>-</td>` 
+            : (isMadeira 
+                ? `<td style="color: #8E44AD; font-weight: bold;">${c.volume.toFixed(2).replace('.', ',')} st</td>`
+                : `<td style="color: #E67E22; font-weight: bold;">${c.peso.toLocaleString('pt-BR')} kg</td>`);
 
           linhasTabela += `
             <tr>
-              <td>${dtBr}</td>
-              <td style="font-weight: bold; color: #2C3E50;">${c.romaneio}</td>
-              <td><div style="font-size: 9px; font-weight: bold; color: ${c.tipo_carga === 'Madeira' ? '#8E44AD' : '#F39C12'}">${c.tipo_carga}</div>${c.variedade}</td>
-              <td>${c.tambores || '-'}</td>
+              <td>${c.quadra === '"' ? '"' : dtBr}</td>
+              <td style="font-weight: bold;">${c.quadra}</td>
+              <td style="font-weight: bold; color: #2980B9;">${c.coleta}</td>
+              <td style="font-weight: bold; color: #8E44AD;">${c.remocao}</td>
+              <td style="font-weight: bold; color: #E67E22;">${c.carregamento_qtd}</td>
+              <td style="font-weight: bold; color: #27AE60;">${c.estoque}</td>
+              <td style="color: #2C3E50;">${c.romaneio}</td>
               ${infoTotal}
-              ${infoMedia}
             </tr>
           `;
         });
@@ -211,22 +340,24 @@ export default function RelatorioCargasScreen() {
             <div class="fazenda-header">
               <h2>📍 FAZENDA ${fazenda}</h2>
               <div class="fazenda-resumo">
-                <span><strong>Cargas:</strong> ${dados.cargas.length}</span> | 
-                <span><strong>Tambores:</strong> ${dados.total_tambores}</span> | 
-                <span><strong>Peso:</strong> <span style="color:#27AE60;">${dados.total_peso.toLocaleString('pt-BR')} kg</span></span> | 
-                <span><strong>Volume:</strong> <span style="color:#8E44AD;">${dados.total_volume.toFixed(2).replace('.', ',')} m³</span></span> | 
+                <span><strong>Tot. Coleta:</strong> <span style="color:#2980B9;">${dados.total_coleta}</span></span> | 
+                <span><strong>Cargas:</strong> ${linhasComCarga.length}</span> | 
+                <span><strong>Tambores Exp:</strong> ${dados.total_tambores}</span> | 
+                <span><strong>Peso Exp:</strong> <span style="color:#27AE60;">${dados.total_peso.toLocaleString('pt-BR')} kg</span></span> | 
                 <span><strong>Média/Carga:</strong> ${mediaCarga.toFixed(2).replace('.', ',')} kg</span>
               </div>
             </div>
             <table>
               <thead>
                 <tr>
-                  <th style="width:12%">Data Saída</th>
-                  <th style="width:18%">Nº Romaneio</th>
-                  <th style="width:20%">Tipo/Variedade</th>
-                  <th style="width:10%">Tambores</th>
-                  <th style="width:20%">Tot (Kg/m³)</th>
-                  <th style="width:20%">Média kg/Tb</th>
+                  <th style="width:10%">Data</th>
+                  <th style="width:12%">Quadra</th>
+                  <th style="width:10%">Coleta</th>
+                  <th style="width:10%">Remoção</th>
+                  <th style="width:14%">Carregamento</th>
+                  <th style="width:10%">Estoque</th>
+                  <th style="width:16%">Nº Romaneio</th>
+                  <th style="width:18%">Tot (Kg/st)</th>
                 </tr>
               </thead>
               <tbody>
@@ -271,7 +402,7 @@ export default function RelatorioCargasScreen() {
             <div class="header-container">
               ${base64Logo ? `<div class="header-logo"><img src="${base64Logo}" /></div>` : ''}
               <div style="text-align: right;">
-                <h1>Relatório de Coletas e Cargas</h1>
+                <h1>Controle Diário - Operações e Cargas</h1>
                 <p style="margin: 4px 0 0 0;">Período: <strong>${dataInicial} a ${dataFinal}</strong></p>
                 <p style="margin: 4px 0 0 0;">Fazenda(s): <strong style="text-transform: uppercase;">${fazendaSelecionada}</strong></p>
                 <p style="margin: 4px 0 0 0;">Tipo Carga: <strong style="text-transform: uppercase;">${tipoCargaSelecionado}</strong></p>
@@ -284,7 +415,7 @@ export default function RelatorioCargasScreen() {
                 <div class="resumo-global-valor">${totalCargasGeral}</div>
               </div>
               <div class="resumo-global-box">
-                <div class="resumo-global-titulo">Tambores</div>
+                <div class="resumo-global-titulo">Tambores Exp.</div>
                 <div class="resumo-global-valor">${totalTamboresGeral}</div>
               </div>
               <div class="resumo-global-box">
@@ -297,7 +428,7 @@ export default function RelatorioCargasScreen() {
               </div>
               <div class="resumo-global-box">
                 <div class="resumo-global-titulo">Volume Exp.</div>
-                <div class="resumo-global-valor" style="color: #9B59B6;">${totalVolumeGeral.toFixed(2).replace('.', ',')} m³</div>
+                <div class="resumo-global-valor" style="color: #9B59B6;">${totalVolumeGeral.toFixed(2).replace('.', ',')} st</div>
               </div>
             </div>
 
@@ -331,14 +462,13 @@ export default function RelatorioCargasScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Relatório de Coletas 🚛</Text>
-        <Text style={styles.subtitle}>Controle de Cargas, Resina e Madeira</Text>
+        <Text style={styles.title}>Diário de Cargas 🚛</Text>
+        <Text style={styles.subtitle}>Controle Cronológico - Coleta e Exportação</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
         <View style={styles.cardFiltros}>
           
-          {/* 🟢 LINHA 1: DATAS */}
           <View style={styles.row}>
             <View style={[styles.col, { flex: 1, marginRight: 8 }]}>
               <Text style={styles.label}>Data Inicial:</Text>
@@ -364,7 +494,6 @@ export default function RelatorioCargasScreen() {
             </View>
           </View>
 
-          {/* 🟢 LINHA 2: FAZENDA E TIPO DE CARGA */}
           <View style={styles.row}>
             <View style={[styles.col, { flex: 1.2, marginRight: 8 }]}>
               <Text style={styles.label}>Fazenda:</Text>
@@ -381,14 +510,14 @@ export default function RelatorioCargasScreen() {
             </View>
             
             <View style={[styles.col, { flex: 1 }]}>
-              <Text style={styles.label}>Tipo Carga:</Text>
+              <Text style={styles.label}>Tipo Registro:</Text>
               <View style={styles.pickerContainer}>
                 <Picker 
                   selectedValue={tipoCargaSelecionado} 
                   onValueChange={setTipoCargaSelecionado} 
                   style={styles.picker}
                 >
-                  <Picker.Item label="Todas" value="TODAS" />
+                  <Picker.Item label="Todos" value="TODAS" />
                   <Picker.Item label="Goma Resina" value="Goma Resina" />
                   <Picker.Item label="Madeira" value="Madeira" />
                 </Picker>
@@ -396,7 +525,6 @@ export default function RelatorioCargasScreen() {
             </View>
           </View>
 
-          {/* INDICADORES GLOBAIS COM MADEIRA */}
           <View style={styles.resumoContainer}>
             <View style={styles.resumoBox}>
               <Text style={styles.resumoTitulo}>Total Cargas</Text>
@@ -421,7 +549,7 @@ export default function RelatorioCargasScreen() {
             <View style={[styles.resumoBox, { width: '48%' }]}>
               <Text style={styles.resumoTitulo}>Volume Exp. (Madeira)</Text>
               <Text style={[styles.resumoValorVerde, { color: '#8E44AD' }]}>
-                {totalVolumeGeral.toFixed(2).replace('.', ',')} m³
+                {totalVolumeGeral.toFixed(2).replace('.', ',')} st
               </Text>
             </View>
           </View>
@@ -431,69 +559,74 @@ export default function RelatorioCargasScreen() {
             onPress={gerarPDF} 
             disabled={gerandoPdf || Object.keys(dadosAgrupados).length === 0}
           >
-            {gerandoPdf ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.btnPdfText}>🖨️ Exportar Fechamento em PDF</Text>}
+            {gerandoPdf ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.btnPdfText}>🖨️ Exportar Diário em PDF</Text>}
           </TouchableOpacity>
         </View>
 
-        {/* RENDERIZAÇÃO HIERÁRQUICA: FECHAMENTO POR FAZENDA */}
         <View style={styles.listaContainer}>
           {carregando ? (
             <ActivityIndicator size="large" color="#2980B9" style={{ marginVertical: 40 }} />
           ) : Object.keys(dadosAgrupados).length === 0 ? (
-            <Text style={styles.emptyState}>Nenhuma carga registrada neste período com este filtro.</Text>
+            <Text style={styles.emptyState}>Nenhum registro encontrado neste período.</Text>
           ) : (
             Object.keys(dadosAgrupados).sort().map(fazenda => {
               const dados = dadosAgrupados[fazenda];
               
-              const cargasResina = dados.cargas.filter((c:any) => c.tipo_carga !== 'Madeira');
-              const mediaFazenda = cargasResina.length > 0 ? (cargasResina.reduce((acc: number, curr: any) => acc + curr.peso, 0) / cargasResina.length) : 0;
+              const linhasComCarga = dados.linhas.filter((c:any) => c.tipo_carga !== '-' && c.tipo_carga !== 'Madeira');
+              const mediaFazenda = linhasComCarga.length > 0 ? (linhasComCarga.reduce((acc: number, curr: any) => acc + curr.peso, 0) / linhasComCarga.length) : 0;
 
               return (
                 <View key={fazenda} style={styles.cardFazenda}>
                   
-                  {/* CABEÇALHO DA FAZENDA COM TAG DE VOLUME */}
                   <View style={styles.headerFazenda}>
                     <Text style={styles.tituloFazenda}>📍 FAZENDA {fazenda}</Text>
                     <View style={styles.tagsFazendaContainer}>
-                       <View style={styles.tagFazenda}><Text style={styles.tagTextoFazenda}>{dados.cargas.length} Cargas</Text></View>
+                       {dados.total_coleta > 0 && <View style={[styles.tagFazenda, {borderColor: '#2980B9'}]}><Text style={[styles.tagTextoFazenda, {color: '#2980B9'}]}>{dados.total_coleta} Coletas</Text></View>}
+                       {linhasComCarga.length > 0 && <View style={styles.tagFazenda}><Text style={styles.tagTextoFazenda}>{linhasComCarga.length} Cargas</Text></View>}
                        {dados.total_tambores > 0 && <View style={styles.tagFazenda}><Text style={styles.tagTextoFazenda}>{dados.total_tambores} Tbs</Text></View>}
                        {dados.total_peso > 0 && <View style={[styles.tagFazenda, {backgroundColor: '#27AE60'}]}><Text style={[styles.tagTextoFazenda, {color: '#FFF'}]}>{dados.total_peso.toLocaleString('pt-BR')} KG</Text></View>}
-                       {dados.total_volume > 0 && <View style={[styles.tagFazenda, {backgroundColor: '#8E44AD'}]}><Text style={[styles.tagTextoFazenda, {color: '#FFF'}]}>{dados.total_volume.toFixed(2).replace('.', ',')} m³</Text></View>}
+                       {dados.total_volume > 0 && <View style={[styles.tagFazenda, {backgroundColor: '#8E44AD'}]}><Text style={[styles.tagTextoFazenda, {color: '#FFF'}]}>{dados.total_volume.toFixed(2).replace('.', ',')} st</Text></View>}
                     </View>
                   </View>
 
-                  {/* TABELA MISTA DE ROMANEIOS DA FAZENDA */}
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <View style={{ minWidth: '100%' }}>
+                    <View style={{ minWidth: 650 }}> 
                       <View style={styles.tableHeader}>
-                        <Text style={[styles.th, { width: 80 }]}>Data Saída</Text>
-                        <Text style={[styles.th, { width: 90 }]}>Nº Romaneio</Text>
-                        <Text style={[styles.th, { width: 100 }]}>Tipo / Var.</Text>
-                        <Text style={[styles.th, { width: 60, textAlign: 'center' }]}>Qtd</Text>
-                        <Text style={[styles.th, { width: 90, textAlign: 'center' }]}>Tot (Kg/m³)</Text>
-                        <Text style={[styles.th, { width: 80, textAlign: 'right' }]}>Média kg/Tb</Text>
+                        <Text style={[styles.th, { width: 75 }]}>Data</Text>
+                        <Text style={[styles.th, { width: 50 }]}>Quadra</Text>
+                        <Text style={[styles.th, { width: 60, textAlign: 'center' }]}>Coleta</Text>
+                        <Text style={[styles.th, { width: 65, textAlign: 'center' }]}>Remoção</Text>
+                        <Text style={[styles.th, { width: 75, textAlign: 'center' }]}>Carregam.</Text>
+                        <Text style={[styles.th, { width: 60, textAlign: 'center' }]}>Estoque</Text>
+                        <Text style={[styles.th, { width: 80 }]}>Nº Roman.</Text>
+                        <Text style={[styles.th, { width: 80, textAlign: 'center' }]}>Tot (Kg/st)</Text>
                       </View>
 
-                      {dados.cargas.map((c: any, index: number) => {
+                      {dados.linhas.map((c: any, index: number) => {
                          const dtBr = c.data !== '-' ? `${c.data.split('-')[2]}/${c.data.split('-')[1]}/${c.data.split('-')[0]}` : '-';
                          const isMadeira = c.tipo_carga === 'Madeira';
+                         const isVazio = c.tipo_carga === '-';
 
                          return (
                           <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-                            <Text style={[styles.td, { width: 80 }]}>{dtBr}</Text>
-                            <Text style={[styles.td, { width: 90, fontWeight: 'bold', color: '#2980B9' }]}>{c.romaneio}</Text>
-                            <View style={{ width: 100, paddingHorizontal: 10, justifyContent: 'center' }}>
-                              <Text style={{ fontSize: 9, fontWeight: 'bold', color: isMadeira ? '#8E44AD' : '#F39C12' }}>{c.tipo_carga}</Text>
-                              <Text style={{ fontSize: 11, color: '#34495E' }}>{c.variedade}</Text>
-                            </View>
-                            <Text style={[styles.td, { width: 60, textAlign: 'center', fontWeight: 'bold' }]}>{c.tambores || '-'}</Text>
+                            <Text style={[styles.td, { width: 75 }]}>{c.quadra === '"' ? '"' : dtBr}</Text>
                             
-                            <Text style={[styles.td, { width: 90, textAlign: 'center', fontWeight: 'bold', color: isMadeira ? '#8E44AD' : '#E67E22' }]}>
-                              {isMadeira ? `${c.volume.toFixed(2).replace('.', ',')} m³` : `${c.peso.toLocaleString('pt-BR')} kg`}
+                            <Text style={[styles.td, { width: 50, fontWeight: 'bold', fontSize: 10 }]} numberOfLines={3}>{c.quadra}</Text>
+                            <Text style={[styles.td, { width: 60, textAlign: 'center', color: '#2980B9', fontWeight: 'bold', fontSize: 11 }]} numberOfLines={3}>{c.coleta}</Text>
+                            <Text style={[styles.td, { width: 65, textAlign: 'center', color: '#8E44AD', fontWeight: 'bold', fontSize: 11 }]} numberOfLines={3}>{c.remocao}</Text>
+                            
+                            <Text style={[styles.td, { width: 75, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : '#E67E22' }]}>
+                              {c.carregamento_qtd}
                             </Text>
+
+                            <Text style={[styles.td, { width: 60, textAlign: 'center', fontWeight: 'bold', fontSize: 12, color: isVazio || c.estoque === '-' ? '#95A5A6' : '#27AE60' }]}>
+                              {c.estoque}
+                            </Text>
+
+                            <Text style={[styles.td, { width: 80, fontWeight: 'bold', color: isVazio ? '#95A5A6' : '#2C3E50' }]} numberOfLines={2}>{c.romaneio}</Text>
                             
-                            <Text style={[styles.td, { width: 80, textAlign: 'right', color: '#27AE60', fontWeight: 'bold' }]}>
-                              {!isMadeira && c.media_tambor > 0 ? `${c.media_tambor.toFixed(2).replace('.', ',')} kg` : '-'}
+                            <Text style={[styles.td, { width: 80, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : (isMadeira ? '#8E44AD' : '#34495E') }]}>
+                              {isVazio ? '-' : (isMadeira ? `${c.volume.toFixed(2).replace('.', ',')} st` : `${c.peso.toLocaleString('pt-BR')} kg`)}
                             </Text>
                           </View>
                         );
@@ -501,7 +634,6 @@ export default function RelatorioCargasScreen() {
                     </View>
                   </ScrollView>
                   
-                  {/* RODAPÉ DE MÉDIA DA FAZENDA */}
                   {mediaFazenda > 0 && (
                     <View style={styles.footerFazenda}>
                       <Text style={styles.textoFooterFazenda}>Média de Goma Resina da Fazenda por Carga: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{mediaFazenda.toFixed(2).replace('.', ',')} kg</Text></Text>

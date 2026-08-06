@@ -6,7 +6,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { supabase } from '../../src/supabase'; // Ajuste o caminho se necessário
+import { supabase } from '../../src/supabase';
 
 // 👉 ALGORITMO OFFLINE DE FERIADOS NACIONAIS
 const obterFeriadosNacionais = (ano: number) => {
@@ -358,6 +358,9 @@ export default function RelatoriosScreen() {
       }
 
       let paginasHTML = '';
+      
+      // 🟢 DATA DE HOJE (Para não gerar falta em dias no futuro)
+      const dataHojeIso = formatarDataIso(new Date());
 
       chavesFolhas.forEach((chave, index) => {
         const folha = agrupado[chave];
@@ -474,7 +477,11 @@ export default function RelatoriosScreen() {
             
             const isAntesAdmissao = dataAdmissaoIsoStr !== null && (isoDate < dataAdmissaoIsoStr);
             
-            if (isAntesAdmissao) {
+            // 🟢 SE A DATA DO LOOP FOR MAIOR QUE HOJE, É FUTURO
+            const isFuturo = isoDate > dataHojeIso;
+            
+            // Se for antes da admissão ou no futuro, a linha fica totalmente em branco
+            if (isAntesAdmissao || isFuturo) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #F4F6F6;"></td></tr>`;
             } else if (diaDaSemana === 0) { 
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EAEDED; color: #7F8C8D; font-weight: bold; letter-spacing: 2px;">DOMINGO</td></tr>`;
@@ -682,7 +689,6 @@ export default function RelatoriosScreen() {
           </View>
         </View>
 
-        {/* 🟢 RENDERIZAÇÃO CONDICIONAL: SOME NA 2ª QUINZENA */}
         {filtroAtivo !== '2Q' && (
           <>
             <Text style={styles.label}>Valor da Diária de Atestado (1ª Quinzena):</Text>

@@ -24,13 +24,15 @@ const ItemRelatorioCard = memo(({ romaneio, isAdmin, onEditar }: any) => {
         
         <View style={styles.lotesResumo}>
           {romaneio.itens.map((i: any, index: number) => (
-            <Text key={index} style={{fontSize: 11, color: '#34495E'}}>• {i.quantidade}x {i.variedade} ({i.fazenda})</Text>
+            <Text key={index} style={{fontSize: 11, color: '#34495E'}}>
+              • {romaneio.tipo_carga === 'Madeira' ? '' : `${i.quantidade}x `}{i.variedade} ({i.fazenda})
+            </Text>
           ))}
         </View>
 
         <Text style={{fontSize: 13, color: romaneio.totalPeso > 0 || romaneio.madeira_volume > 0 ? '#27AE60' : '#E67E22', fontWeight: 'bold', marginTop: 5}}>
           {romaneio.tipo_carga === 'Madeira' 
-            ? `Volume: ${romaneio.madeira_volume ? romaneio.madeira_volume.toFixed(2).replace('.', ',') : '0'} m³`
+            ? `Volume: ${romaneio.madeira_volume ? romaneio.madeira_volume.toFixed(2).replace('.', ',') : '0'} st`
             : `Total: ${romaneio.totalQtd} Tb | Peso Líq: ${romaneio.totalPeso > 0 ? `${romaneio.totalPeso.toFixed(2).replace('.', ',')} Kg` : 'Pendente'}`
           }
         </Text>
@@ -50,27 +52,26 @@ const ItemRelatorioCard = memo(({ romaneio, isAdmin, onEditar }: any) => {
 // TELA PRINCIPAL
 // =========================================================================
 export default function CarregamentosScreen() {
-  const [abaAtiva, setAbaAtiva] = useState<'novo' | 'relatorio'>('novo');
+  const [abaAtiva, setAbaAtiva] = useState<'novo' | 'remocao' | 'relatorio'>('novo');
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [carregamentosPendentes, setCarregamentosPendentes] = useState<any[]>([]);
+  const [remocoesPendentes, setRemocoesPendentes] = useState<any[]>([]);
   const [sincronizando, setSincronizando] = useState(false);
 
   // 👉 ESTADOS GERAIS DO ROMANEIO
   const [romaneioEditando, setRomaneioEditando] = useState<string | null>(null);
   const [dataSaida, setDataSaida] = useState('');
   const [numeroRomaneio, setNumeroRomaneio] = useState('');
-  const [tipoCarga, setTipoCarga] = useState('Goma Resina'); // Madeira ou Goma
-  const [tipoOperacao, setTipoOperacao] = useState('Compra'); // Compra ou Transferência
+  const [tipoCarga, setTipoCarga] = useState('Goma Resina'); 
+  const [tipoOperacao, setTipoOperacao] = useState('Compra'); 
   
-  // 👉 DADOS DE TRANSPORTE
+  // 👉 DADOS DE TRANSPORTE E PROCEDÊNCIA (Carregamento)
   const [motorista, setMotorista] = useState('');
   const [placa, setPlaca] = useState('');
   const [horaEntrada, setHoraEntrada] = useState('');
   const [horaSaida, setHoraSaida] = useState('');
-
-  // 👉 DADOS DE PROCEDÊNCIA E LOCAL
   const [procedenciaTipo, setProcedenciaTipo] = useState('Produção Própria');
   const [procedenciaNome, setProcedenciaNome] = useState('');
   const [localQuadra, setLocalQuadra] = useState('');
@@ -94,6 +95,14 @@ export default function CarregamentosScreen() {
   const [itemQuantidade, setItemQuantidade] = useState('');
   const [itensCarga, setItensCarga] = useState<any[]>([]);
   
+  // 🟢 ESTADOS DA NOVA ABA: REMOÇÃO
+  const [dataRemocao, setDataRemocao] = useState('');
+  const [fazendaRemocao, setFazendaRemocao] = useState('');
+  const [quadraRemocao, setQuadraRemocao] = useState('');
+  const [ramalRemocao, setRamalRemocao] = useState('');
+  const [qtdRemocao, setQtdRemocao] = useState('');
+  const [obsRemocao, setObsRemocao] = useState('');
+
   const [listaFazendas, setListaFazendas] = useState<string[]>([]);
   const [salvando, setSalvando] = useState(false);
 
@@ -117,6 +126,7 @@ export default function CarregamentosScreen() {
   useEffect(() => {
     const hoje = new Date();
     setDataSaida(hoje.toLocaleDateString('pt-BR'));
+    setDataRemocao(hoje.toLocaleDateString('pt-BR'));
     
     const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
@@ -126,7 +136,6 @@ export default function CarregamentosScreen() {
 
   const totalTamboresCarga = itensCarga.reduce((acc, curr) => acc + parseInt(curr.quantidade || '0'), 0);
 
-  // 🧮 CALCULO AUTOMÁTICO DE PESO LÍQUIDO
   useEffect(() => {
     const b = parseFloat(pesoBruto.replace(',', '.')) || 0;
     const t = parseFloat(tara.replace(',', '.')) || 0;
@@ -136,7 +145,6 @@ export default function CarregamentosScreen() {
     }
   }, [pesoBruto, tara]);
 
-  // 🧮 CALCULO AUTOMÁTICO DE MÉDIA DE TAMBOR
   useEffect(() => {
     const pesoNum = parseFloat(pesoLiquidoTotal.replace(',', '.')) || 0;
     if (totalTamboresCarga > 0 && pesoNum > 0) {
@@ -147,7 +155,6 @@ export default function CarregamentosScreen() {
     }
   }, [itensCarga, pesoLiquidoTotal]);
 
-  // 🧮 CALCULO AUTOMÁTICO DO VOLUME DA MADEIRA
   useEffect(() => {
     const a = parseFloat(alturaMedia.replace(',', '.')) || 0;
     const l = parseFloat(largura.replace(',', '.')) || 0;
@@ -174,8 +181,11 @@ export default function CarregamentosScreen() {
 
   const carregarFilaOffline = async () => {
     try {
-      const dados = await AsyncStorage.getItem('@carregamentos_off');
-      if (dados) setCarregamentosPendentes(JSON.parse(dados));
+      const dadosCarregamentos = await AsyncStorage.getItem('@carregamentos_off');
+      if (dadosCarregamentos) setCarregamentosPendentes(JSON.parse(dadosCarregamentos));
+
+      const dadosRemocoes = await AsyncStorage.getItem('@remocoes_off');
+      if (dadosRemocoes) setRemocoesPendentes(JSON.parse(dadosRemocoes));
     } catch (e) { console.log(e); }
   };
 
@@ -219,15 +229,20 @@ export default function CarregamentosScreen() {
   };
 
   const adicionarItem = () => {
-    if (!itemFazenda || !itemQuantidade) {
-      return Alert.alert("Aviso", "Selecione a Fazenda e a Quantidade/Lote!");
+    if (!itemFazenda) {
+      return Alert.alert("Aviso", "Selecione a Fazenda!");
     }
+    if (tipoCarga !== 'Madeira' && !itemQuantidade) {
+      return Alert.alert("Aviso", "Informe a Quantidade de Tambores!");
+    }
+
     setItensCarga([...itensCarga, { 
       id_temp: Date.now().toString(),
       fazenda: itemFazenda, 
       variedade: itemVariedade, 
-      quantidade: itemQuantidade 
+      quantidade: tipoCarga === 'Madeira' ? '0' : itemQuantidade 
     }]);
+    
     setItemFazenda('');
     setItemQuantidade('');
   };
@@ -260,7 +275,7 @@ export default function CarregamentosScreen() {
     const compNum = comprimento ? parseFloat(comprimento.replace(',', '.')) : null;
 
     const payloadMultiplo = itensCarga.map(item => {
-      const qtdLote = parseInt(item.quantidade);
+      const qtdLote = parseInt(item.quantidade) || 0;
       return {
         data_saida: dataBd,
         numero_romaneio: numeroRomaneio,
@@ -309,7 +324,7 @@ export default function CarregamentosScreen() {
         ]
       );
       
-      limparFormulario();
+      limparFormularioCarregamento();
     } catch (error) {
       Alert.alert("Erro", "Falha ao salvar carregamento no celular.");
     } finally {
@@ -317,33 +332,94 @@ export default function CarregamentosScreen() {
     }
   };
 
-  const sincronizarComBanco = async () => {
-    if (carregamentosPendentes.length === 0) return;
+  const salvarRemocao = async () => {
+    if (!dataRemocao || !fazendaRemocao || !quadraRemocao || !qtdRemocao) {
+      return Alert.alert("Aviso", "Preencha Data, Fazenda, Quadra e a Quantidade de tambores!");
+    }
+    const dataBd = converterDataBanco(dataRemocao);
+    if (!dataBd) return Alert.alert("Aviso", "Data inválida.");
+
+    setSalvando(true);
+    
+    const payload = {
+      data: dataBd,
+      fazenda: fazendaRemocao,
+      quadra: quadraRemocao,
+      ramal: ramalRemocao || '-', 
+      servico: 'REMOÇÃO',
+      quantidade: parseInt(qtdRemocao),
+      colaborador: 'EQUIPE DE REMOÇÃO',
+      observacao: obsRemocao || '',
+      valor_unitario: 0,
+      valor_total: 0,
+      tipo_resina: '-',
+      fiscal_nome: 'SISTEMA'
+    };
+
+    try {
+      const novaLista = [...remocoesPendentes, payload];
+      await AsyncStorage.setItem('@remocoes_off', JSON.stringify(novaLista));
+      setRemocoesPendentes(novaLista);
+      Alert.alert("Sucesso", "Remoção salva na fila e pronta para envio!");
+      
+      setQuadraRemocao('');
+      setRamalRemocao('');
+      setQtdRemocao('');
+      setObsRemocao('');
+    } catch (e) {
+      Alert.alert("Erro", "Falha ao salvar a remoção no celular.");
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const sincronizarGeralComBanco = async () => {
+    if (carregamentosPendentes.length === 0 && remocoesPendentes.length === 0) return;
     setSincronizando(true);
 
     try {
-      for (const item of carregamentosPendentes) {
-        if (item.isEdit && item.romaneioOriginal) {
-          await supabase.from('carregamentos').delete().eq('numero_romaneio', item.romaneioOriginal);
+      if (carregamentosPendentes.length > 0) {
+        for (const item of carregamentosPendentes) {
+          if (item.isEdit && item.romaneioOriginal) {
+            await supabase.from('carregamentos').delete().eq('numero_romaneio', item.romaneioOriginal);
+          }
+          const { error } = await supabase.from('carregamentos').insert(item.payload);
+          if (error) throw new Error(`Carregamento: ${error.message}`);
         }
-        const { error } = await supabase.from('carregamentos').insert(item.payload);
-        if (error) throw new Error(error.message);
+        await AsyncStorage.removeItem('@carregamentos_off');
+        setCarregamentosPendentes([]);
       }
-      
-      await AsyncStorage.removeItem('@carregamentos_off');
-      setCarregamentosPendentes([]);
-      Alert.alert("🚀 Sucesso!", "Todos os romaneios foram enviados para a nuvem.");
-      
+
+      if (remocoesPendentes.length > 0) {
+        const remocoesCorrigidas = remocoesPendentes.map(item => ({
+          ...item,
+          colaborador: item.colaborador || 'EQUIPE DE REMOÇÃO',
+          ramal: item.ramal || '-',
+          valor_unitario: item.valor_unitario || 0,
+          valor_total: item.valor_total || 0,
+          fiscal_nome: item.fiscal_nome || 'SISTEMA',
+          tipo_resina: item.tipo_resina || '-',
+          observacao: item.observacao || ''
+        }));
+
+        const { error } = await supabase.from('diarios_campo').insert(remocoesCorrigidas);
+        if (error) throw new Error(`Remoção: ${error.message}`);
+        
+        await AsyncStorage.removeItem('@remocoes_off');
+        setRemocoesPendentes([]);
+      }
+
+      Alert.alert("🚀 Sucesso!", "Todos os dados foram enviados para a nuvem.");
       if (abaAtiva === 'relatorio') buscarRelatorio();
 
     } catch (e: any) {
-      Alert.alert("Erro na Sincronização", "A internet falhou: " + e.message);
+      Alert.alert("Erro na Sincronização", "A internet falhou ou banco recusou: \n" + e.message);
     } finally {
       setSincronizando(false);
     }
   };
 
-  const limparFormulario = () => {
+  const limparFormularioCarregamento = () => {
     setRomaneioEditando(null);
     setNumeroRomaneio(''); 
     setProcedenciaNome('');
@@ -369,10 +445,7 @@ export default function CarregamentosScreen() {
     setRomaneioEditando(base.numero_romaneio);
     setDataSaida(base.data_saida.split('-').reverse().join('/'));
     setNumeroRomaneio(base.numero_romaneio);
-    
-    // Atualiza o tipo e a variedade na mesma hora para evitar dessincronia
     setTipoCarga(base.tipo_carga || 'Goma Resina');
-    
     setTipoOperacao(base.tipo_operacao || 'Compra');
     setProcedenciaTipo(base.procedencia_tipo);
     setProcedenciaNome(base.procedencia_nome || '');
@@ -413,7 +486,6 @@ export default function CarregamentosScreen() {
     
     const checkMadeira = base.tipo_carga === 'Madeira' ? '☑' : '☐';
     const checkResina = base.tipo_carga === 'Goma Resina' ? '☑' : '☐';
-    
     const checkCompra = base.tipo_operacao === 'Compra' ? '☑' : '☐';
     const checkTransferencia = base.tipo_operacao === 'Transferência' ? '☑' : '☐';
 
@@ -472,7 +544,7 @@ export default function CarregamentosScreen() {
                 <div class="pesagem-item">Altura Média: <span class="line-bottom" style="text-align:center;">${base.madeira_altura || ''}</span> m</div>
                 <div class="pesagem-item">Largura: <span class="line-bottom" style="text-align:center;">${base.madeira_largura || ''}</span> m</div>
                 <div class="pesagem-item">Comprimento: <span class="line-bottom" style="text-align:center;">${base.madeira_comprimento || ''}</span> m</div>
-                <div class="pesagem-item">Volume: <span class="line-bottom" style="text-align:center;">${base.madeira_volume || ''}</span> m³</div>
+                <div class="pesagem-item">Volume: <span class="line-bottom" style="text-align:center;">${base.madeira_volume || ''}</span> st</div>
               </div>
               <div class="col-pesagem">
                 <div class="pesagem-item">Tambores: <span class="line-bottom" style="text-align:center;">${qtdTotalCalc > 0 ? qtdTotalCalc : ''}</span> Unidade</div>
@@ -579,34 +651,39 @@ export default function CarregamentosScreen() {
         )}
 
         <View style={styles.header}>
-          <Text style={styles.title}>Expedição 🚛</Text>
-          <Text style={styles.subtitle}>Gestão de Cargas e Madeiras</Text>
+          <Text style={styles.title}>Expedição & Remoção 🚛</Text>
+          <Text style={styles.subtitle}>Gestão Operacional de Movimentação</Text>
         </View>
 
         <View style={styles.menuAbas}>
           <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'novo' && styles.abaAtiva]} onPress={() => setAbaAtiva('novo')}>
             <Text style={[styles.abaTexto, abaAtiva === 'novo' && styles.abaTextoAtivo]}>
-              {romaneioEditando ? '✏️ Editando Carga' : 'Novo Carregamento'}
+              {romaneioEditando ? '✏️ Editar Carga' : 'Carregamento'}
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'remocao' && styles.abaAtiva]} onPress={() => setAbaAtiva('remocao')}>
+            <Text style={[styles.abaTexto, abaAtiva === 'remocao' && styles.abaTextoAtivo]}>Remoção</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={[styles.abaBotao, abaAtiva === 'relatorio' && styles.abaAtiva]} onPress={() => setAbaAtiva('relatorio')}>
-            <Text style={[styles.abaTexto, abaAtiva === 'relatorio' && styles.abaTextoAtivo]}>Relatório de Saídas</Text>
+            <Text style={[styles.abaTexto, abaAtiva === 'relatorio' && styles.abaTextoAtivo]}>Relatórios</Text>
           </TouchableOpacity>
         </View>
 
+        {/* ========================================================================= */}
+        {/* CONTEÚDO: CARREGAMENTO */}
+        {/* ========================================================================= */}
         {abaAtiva === 'novo' && (
           <View style={styles.card}>
             
-            {carregamentosPendentes.length > 0 && (
+            {(carregamentosPendentes.length > 0 || remocoesPendentes.length > 0) && (
               <View style={styles.syncCard}>
-                <Text style={styles.syncTexto}>📦 {carregamentosPendentes.length} romaneio(s) aguardando envio</Text>
-                <TouchableOpacity style={styles.btnSync} onPress={sincronizarComBanco} disabled={sincronizando}>
+                <Text style={styles.syncTexto}>📦 {carregamentosPendentes.length + remocoesPendentes.length} pendência(s) aguardando envio</Text>
+                <TouchableOpacity style={styles.btnSync} onPress={sincronizarGeralComBanco} disabled={sincronizando}>
                   {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={styles.btnSyncTexto}>🚀 ENVIAR PARA NUVEM</Text>}
                 </TouchableOpacity>
               </View>
             )}
 
-            {/* 👉 BLOCO 1: CABEÇALHO */}
             <Text style={styles.formTitle}>1. Cabeçalho do Romaneio</Text>
             <View style={styles.row}>
               <View style={styles.col}>
@@ -622,7 +699,6 @@ export default function CarregamentosScreen() {
             <View style={styles.row}>
               <View style={styles.col}>
                 <Text style={styles.label}>Tipo de Carga:</Text>
-                {/* 🟢 SOLUÇÃO: BATENDO AS ATUALIZAÇÕES DE STATE JUNTAS NO ONVALUECHANGE */}
                 <View style={[styles.pickerContainer, { borderColor: tipoCarga === 'Madeira' ? '#8E44AD' : '#E0E6ED' }]}>
                   <Picker 
                     selectedValue={tipoCarga} 
@@ -648,7 +724,6 @@ export default function CarregamentosScreen() {
               </View>
             </View>
 
-            {/* 👉 BLOCO 2: TRANSPORTE */}
             <Text style={styles.formTitle}>2. Transporte e Procedência</Text>
             <View style={styles.row}>
               <View style={{width: '65%'}}>
@@ -675,7 +750,6 @@ export default function CarregamentosScreen() {
             <Text style={styles.label}>Local / Quadra (Anotação Livro):</Text>
             <TextInput style={styles.input} value={localQuadra} onChangeText={setLocalQuadra} placeholder="Referência de local" />
 
-            {/* 👉 BLOCO 3: SE MADEIRA (Dimensões) */}
             {tipoCarga === 'Madeira' && (
               <View style={[styles.caixaLotes, { borderColor: '#8E44AD', backgroundColor: '#F9E79F' }]}>
                 <Text style={[styles.formTitle, { color: '#8E44AD' }]}>Dimensões da Madeira (m)</Text>
@@ -695,12 +769,11 @@ export default function CarregamentosScreen() {
                 </View>
                 <View style={styles.caixaMedia}>
                   <Text style={styles.mediaTexto}>Volume Calculado:</Text>
-                  <Text style={styles.mediaValor}>{volume || '0,00'} m³</Text>
+                  <Text style={styles.mediaValor}>{volume || '0,00'} st</Text>
                 </View>
               </View>
             )}
 
-            {/* 👉 BLOCO 4: ADICIONAR FAZENDAS (LOTES) */}
             <View style={styles.caixaLotes}>
               <Text style={styles.formTitle}>Adicionar Origem (Fazendas/Lotes)</Text>
               
@@ -716,7 +789,6 @@ export default function CarregamentosScreen() {
                 </View>
                 <View style={styles.col}>
                   <Text style={styles.label}>Variedade:</Text>
-                  {/* 🟢 SOLUÇÃO: SEPARAÇÃO TOTAL DOS PICKERS NO CÓDIGO JSX */}
                   <View style={styles.pickerContainer}>
                     {tipoCarga === 'Madeira' ? (
                       <Picker selectedValue={itemVariedade} onValueChange={setItemVariedade} style={styles.picker}>
@@ -735,13 +807,15 @@ export default function CarregamentosScreen() {
               </View>
 
               <View style={styles.row}>
-                <View style={{width: '60%'}}>
-                  <Text style={styles.label}>{tipoCarga === 'Madeira' ? 'Qtd Cargas/Unidade:' : 'Qtd Tambores:'}</Text>
-                  <TextInput style={styles.input} value={itemQuantidade} onChangeText={setItemQuantidade} keyboardType="numeric" placeholder="Ex: 20" />
-                </View>
-                <View style={{width: '35%', justifyContent: 'center', paddingTop: 5}}>
+                {tipoCarga !== 'Madeira' && (
+                  <View style={{width: '60%'}}>
+                    <Text style={styles.label}>Qtd Tambores:</Text>
+                    <TextInput style={styles.input} value={itemQuantidade} onChangeText={setItemQuantidade} keyboardType="numeric" placeholder="Ex: 20" />
+                  </View>
+                )}
+                <View style={{width: tipoCarga === 'Madeira' ? '100%' : '35%', justifyContent: 'center', paddingTop: tipoCarga === 'Madeira' ? 0 : 5}}>
                   <TouchableOpacity style={styles.btnAdicionarLote} onPress={adicionarItem}>
-                    <Text style={{color: '#FFF', fontWeight: 'bold'}}>➕ Add</Text>
+                    <Text style={{color: '#FFF', fontWeight: 'bold'}}>➕ Add {tipoCarga === 'Madeira' ? 'Origem/Lote' : ''}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -751,7 +825,9 @@ export default function CarregamentosScreen() {
                   <Text style={{fontWeight: 'bold', color: '#2C3E50', marginBottom: 5}}>Itens na Carga:</Text>
                   {itensCarga.map((item) => (
                     <View key={item.id_temp} style={styles.loteItem}>
-                      <Text style={{flex: 1, color: '#34495E'}}>📦 {item.quantidade}x {item.variedade} ({item.fazenda})</Text>
+                      <Text style={{flex: 1, color: '#34495E'}}>
+                        📦 {tipoCarga === 'Madeira' ? '' : `${item.quantidade}x `}{item.variedade} ({item.fazenda})
+                      </Text>
                       <TouchableOpacity onPress={() => removerItem(item.id_temp)}>
                         <Text style={{color: '#E74C3C', fontWeight: 'bold', padding: 5}}>X</Text>
                       </TouchableOpacity>
@@ -761,7 +837,6 @@ export default function CarregamentosScreen() {
               )}
             </View>
 
-            {/* 👉 BLOCO 5: PESAGEM E OBSERVAÇÕES */}
             <Text style={styles.formTitle}>Pesagem Global e Observações</Text>
             
             <View style={styles.row}>
@@ -802,13 +877,84 @@ export default function CarregamentosScreen() {
             </TouchableOpacity>
 
             {romaneioEditando && (
-              <TouchableOpacity style={styles.btnCancelarEdicao} onPress={limparFormulario}>
+              <TouchableOpacity style={styles.btnCancelarEdicao} onPress={limparFormularioCarregamento}>
                 <Text style={styles.btnCancelarTexto}>Cancelar Edição</Text>
               </TouchableOpacity>
             )}
           </View>
         )}
 
+        {/* ========================================================================= */}
+        {/* 🟢 CONTEÚDO DA NOVA ABA: REMOÇÃO */}
+        {/* ========================================================================= */}
+        {abaAtiva === 'remocao' && (
+          <View style={[styles.card, { borderColor: '#8E44AD', borderWidth: 2 }]}>
+            
+            {(carregamentosPendentes.length > 0 || remocoesPendentes.length > 0) && (
+              <View style={styles.syncCard}>
+                <Text style={styles.syncTexto}>📦 {carregamentosPendentes.length + remocoesPendentes.length} pendência(s) aguardando envio</Text>
+                <TouchableOpacity style={styles.btnSync} onPress={sincronizarGeralComBanco} disabled={sincronizando}>
+                  {sincronizando ? <ActivityIndicator color="#F39C12" size="small" /> : <Text style={styles.btnSyncTexto}>🚀 ENVIAR PARA NUVEM</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <Text style={[styles.formTitle, { color: '#8E44AD' }]}>Registrar Remoção de Tambores</Text>
+            <Text style={{ fontSize: 13, color: '#7F8C8D', marginBottom: 15 }}>
+              A remoção indica que os tambores foram tirados da floresta (Quadra/Ramal) e levados para o local de estocagem, prontos para o carregamento.
+            </Text>
+
+            <View style={styles.row}>
+              <View style={styles.col}>
+                <Text style={styles.label}>Data da Remoção:</Text>
+                <TextInput style={styles.input} value={dataRemocao} onChangeText={t => setDataRemocao(aplicarMascaraData(t))} placeholder="DD/MM/AAAA" keyboardType="numeric" />
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>Fazenda:</Text>
+                <View style={styles.pickerContainer}>
+                  <Picker selectedValue={fazendaRemocao} onValueChange={setFazendaRemocao} style={styles.picker}>
+                    <Picker.Item label="..." value="" />
+                    {listaFazendas.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
+                  </Picker>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.row}>
+              <View style={styles.col}>
+                <Text style={styles.label}>Quadra:</Text>
+                <TextInput style={styles.input} value={quadraRemocao} onChangeText={setQuadraRemocao} placeholder="Ex: 15, 16" />
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>Ramal (Opcional):</Text>
+                <TextInput style={styles.input} value={ramalRemocao} onChangeText={setRamalRemocao} placeholder="Ex: 2, 3" />
+              </View>
+            </View>
+
+            <View style={{ marginBottom: 15 }}>
+              <Text style={styles.label}>Qtd Tambores:</Text>
+              <TextInput style={styles.input} value={qtdRemocao} onChangeText={setQtdRemocao} keyboardType="numeric" placeholder="Ex: 45" />
+            </View>
+
+            <Text style={styles.label}>Observações (Opcional):</Text>
+            <TextInput 
+              style={[styles.input, { height: 80, textAlignVertical: 'top' }]} 
+              value={obsRemocao} 
+              onChangeText={setObsRemocao} 
+              placeholder="Tratorista, dificuldades de acesso, etc..." 
+              multiline={true} 
+            />
+
+            <TouchableOpacity style={[styles.button, {backgroundColor: '#8E44AD'}, salvando && styles.buttonDisabled]} onPress={salvarRemocao} disabled={salvando}>
+              {salvando ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>🚜 Salvar Remoção na Fila</Text>}
+            </TouchableOpacity>
+
+          </View>
+        )}
+
+        {/* ========================================================================= */}
+        {/* CONTEÚDO: RELATÓRIO DE SAÍDAS */}
+        {/* ========================================================================= */}
         {abaAtiva === 'relatorio' && (
           <View style={styles.card}>
             <Text style={styles.formTitle}>Busca de Romaneios Salvos</Text>
@@ -863,11 +1009,13 @@ const styles = StyleSheet.create({
   header: { marginBottom: 20, marginTop: 10, alignItems: 'center' },
   title: { fontSize: 28, fontWeight: 'bold', color: '#2C3E50' },
   subtitle: { fontSize: 16, color: '#7F8C8D', marginTop: 5 },
+  
   menuAbas: { flexDirection: 'row', backgroundColor: '#E0E6ED', borderRadius: 10, padding: 4, marginBottom: 20 },
   abaBotao: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
   abaAtiva: { backgroundColor: '#FFFFFF', elevation: 2 },
-  abaTexto: { fontWeight: 'bold', color: '#7F8C8D' },
+  abaTexto: { fontWeight: 'bold', color: '#7F8C8D', fontSize: 12 },
   abaTextoAtivo: { color: '#2980B9' },
+  
   card: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 15, elevation: 5 },
   formTitle: { fontSize: 16, fontWeight: 'bold', color: '#2980B9', marginBottom: 15, marginTop: 10, borderBottomWidth: 1, borderBottomColor: '#ECF0F1', paddingBottom: 5 },
   label: { fontSize: 13, fontWeight: '700', color: '#34495E', marginBottom: 5 },
