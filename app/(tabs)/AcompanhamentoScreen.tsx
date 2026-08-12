@@ -52,6 +52,12 @@ export default function AcompanhamentoScreen() {
   const [registros, setRegistros] = useState<any[]>([]);
   const [carregando, setCarregando] = useState(false);
   
+  // 🟢 ESTADOS DO PERFIL
+  const [perfilUsuario, setPerfilUsuario] = useState('ADMIN'); 
+  const [nomeUsuarioLogado, setNomeUsuarioLogado] = useState('');
+  const [idUsuarioLogado, setIdUsuarioLogado] = useState('');
+  const [carregandoPerfil, setCarregandoPerfil] = useState(true);
+
   const [gerandoPdf, setGerandoPdf] = useState(false);
   const [gerandoPdfResumo, setGerandoPdfResumo] = useState(false);
 
@@ -62,7 +68,7 @@ export default function AcompanhamentoScreen() {
   const [totalAtestados, setTotalAtestados] = useState(0);
   const [equipeTamanho, setEquipeTamanho] = useState(0); 
 
-  // 🟢 Listas de Nomes
+  // Listas de Nomes
   const [nomesFaltas, setNomesFaltas] = useState<string[]>([]);
   const [nomesAtestados, setNomesAtestados] = useState<string[]>([]);
 
@@ -71,20 +77,25 @@ export default function AcompanhamentoScreen() {
   const [mostrarResumoServicos, setMostrarResumoServicos] = useState(false);
 
   useEffect(() => {
+    const inicializar = async () => {
+      await carregarFiscais();
+      await carregarPerfilUsuario();
+    };
+
     const hoje = new Date();
     const dia = String(hoje.getDate()).padStart(2, '0');
     const mes = String(hoje.getMonth() + 1).padStart(2, '0');
     const ano = hoje.getFullYear();
     setDataSelecionada(`${dia}/${mes}/${ano}`);
     
-    carregarFiscais();
+    inicializar();
   }, []);
 
   useEffect(() => {
-    if (dataSelecionada.length === 10) {
+    if (dataSelecionada.length === 10 && !carregandoPerfil) {
       buscarProducaoDoDia();
     }
-  }, [dataSelecionada, fiscalSelecionado]);
+  }, [dataSelecionada, fiscalSelecionado, perfilUsuario]);
 
   const aplicarMascaraData = (texto: string) => {
     let valorSujo = texto.replace(/\D/g, ''); 
@@ -97,6 +108,31 @@ export default function AcompanhamentoScreen() {
     }
 
     setDataSelecionada(valorSujo);
+  };
+
+  const carregarPerfilUsuario = async () => {
+    setCarregandoPerfil(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      setIdUsuarioLogado(user.id);
+      const { data: usuarioData } = await supabase
+        .from('perfis') 
+        .select('cargo, nome')
+        .eq('id', user.id) 
+        .single();
+
+      if (usuarioData) {
+        setPerfilUsuario(usuarioData.cargo);
+        setNomeUsuarioLogado(usuarioData.nome);
+
+        // 🟢 Se for Fiscal, trava o estado automaticamente nele
+        if (usuarioData.cargo === 'Fiscal de Campo') {
+          setFiscalSelecionado(user.id);
+        }
+      }
+    }
+    setCarregandoPerfil(false);
   };
 
   const carregarFiscais = async () => {
@@ -129,10 +165,19 @@ export default function AcompanhamentoScreen() {
 
     setCarregando(true);
     try {
-      let fiscalNome = '';
-      if (fiscalSelecionado !== 'TODOS') {
-        const fObj = listaFiscais.find(f => f.id === fiscalSelecionado);
-        if (fObj) fiscalNome = fObj.nome;
+      // 🟢 DEFINE QUEM É O FISCAL COM BASE NO PERFIL
+      let fiscalNomeQuery = '';
+      let fiscalIdQuery = 'TODOS';
+
+      if (perfilUsuario === 'Fiscal de Campo') {
+        fiscalNomeQuery = nomeUsuarioLogado;
+        fiscalIdQuery = idUsuarioLogado;
+      } else {
+        fiscalIdQuery = fiscalSelecionado;
+        if (fiscalSelecionado !== 'TODOS') {
+          const fObj = listaFiscais.find(f => f.id === fiscalSelecionado);
+          if (fObj) fiscalNomeQuery = fObj.nome;
+        }
       }
 
       // 1. BUSCA DIÁRIOS DE CAMPO
@@ -143,20 +188,22 @@ export default function AcompanhamentoScreen() {
         .lte('data', `${dataBD} 23:59:59`)
         .order('colaborador', { ascending: true });
 
-      if (fiscalSelecionado !== 'TODOS') queryProd = queryProd.eq('fiscal_nome', fiscalNome);
+      if (fiscalIdQuery !== 'TODOS') {
+        queryProd = queryProd.eq('fiscal_nome', fiscalNomeQuery);
+      }
       
       const { data, error } = await queryProd;
       if (error) throw error;
 
       // 2. BUSCA O TAMANHO DA EQUIPE VINCULADA
       let queryEquipe = supabase.from('colaboradores').select('nome');
-      if (fiscalSelecionado !== 'TODOS') {
-        queryEquipe = queryEquipe.eq('fiscal_id', fiscalSelecionado);
+      if (fiscalIdQuery !== 'TODOS') {
+        queryEquipe = queryEquipe.eq('fiscal_id', fiscalIdQuery);
       }
       const { data: equipeData } = await queryEquipe;
 
       // =========================================================
-      // 🟢 MATEMÁTICA DE FALTA AUTOMÁTICA E MAPEAMENTO DOS NOMES
+      // MATEMÁTICA DE FALTA AUTOMÁTICA E MAPEAMENTO DOS NOMES
       // =========================================================
       const totalAtivos = equipeData ? equipeData.length : 0;
       setEquipeTamanho(totalAtivos);
@@ -319,7 +366,9 @@ export default function AcompanhamentoScreen() {
     setGerandoPdf(true);
 
     let nomeDaEquipePdf = 'Todas Equipes';
-    if (fiscalSelecionado !== 'TODOS') {
+    if (perfilUsuario === 'Fiscal de Campo') {
+      nomeDaEquipePdf = nomeUsuarioLogado;
+    } else if (fiscalSelecionado !== 'TODOS') {
       const fObj = listaFiscais.find(f => f.id === fiscalSelecionado);
       if (fObj) nomeDaEquipePdf = fObj.nome;
     }
@@ -411,7 +460,9 @@ export default function AcompanhamentoScreen() {
     setGerandoPdfResumo(true);
 
     let nomeDaEquipePdf = 'Todas Equipes';
-    if (fiscalSelecionado !== 'TODOS') {
+    if (perfilUsuario === 'Fiscal de Campo') {
+      nomeDaEquipePdf = nomeUsuarioLogado;
+    } else if (fiscalSelecionado !== 'TODOS') {
       const fObj = listaFiscais.find(f => f.id === fiscalSelecionado);
       if (fObj) nomeDaEquipePdf = fObj.nome;
     }
@@ -482,7 +533,6 @@ export default function AcompanhamentoScreen() {
         <Text style={styles.subtitle}>Acompanhamento em tempo real</Text>
       </View>
 
-      {/* 🟢 TELA INTEIRA ROLÁVEL AGORA (Resolve o "esmagamento" da tabela embaixo) */}
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
         
         <View style={styles.cardFiltros}>
@@ -500,18 +550,28 @@ export default function AcompanhamentoScreen() {
             </View>
             <View style={[styles.col, { flex: 0.55 }]}>
               <Text style={styles.label}>Equipe (Fiscal):</Text>
-              <View style={styles.pickerContainer}>
-                <Picker 
-                  selectedValue={fiscalSelecionado} 
-                  onValueChange={setFiscalSelecionado} 
-                  style={styles.picker}
-                >
-                  <Picker.Item label="Todas Equipes" value="TODOS" />
-                  {listaFiscais.map((fiscal, index) => (
-                    <Picker.Item key={index} label={fiscal.nome} value={fiscal.id} />
-                  ))}
-                </Picker>
-              </View>
+              {carregandoPerfil ? (
+                <ActivityIndicator size="small" color="#2980B9" />
+              ) : perfilUsuario === 'Fiscal de Campo' ? (
+                <View style={[styles.input, { backgroundColor: '#EAEDED', justifyContent: 'center', height: 42, paddingVertical: 0 }]}>
+                  <Text style={{ fontSize: 13, color: '#7F8C8D', fontWeight: 'bold' }} numberOfLines={1}>
+                    {nomeUsuarioLogado} (Sua Equipe)
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.pickerContainer}>
+                  <Picker 
+                    selectedValue={fiscalSelecionado} 
+                    onValueChange={setFiscalSelecionado} 
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Todas Equipes" value="TODOS" />
+                    {listaFiscais.map((fiscal, index) => (
+                      <Picker.Item key={index} label={fiscal.nome} value={fiscal.id} />
+                    ))}
+                  </Picker>
+                </View>
+              )}
             </View>
           </View>
 
@@ -556,7 +616,6 @@ export default function AcompanhamentoScreen() {
 
               {mostrarResumoServicos && (
                 <View style={styles.containerResumoDetalhado}>
-                  {/* Sem ScrollView interno para não dar duplo-scroll chato! */}
                   <View>
                     {Object.keys(resumoHierarquico).sort().map((servico) => (
                       <View key={servico} style={styles.blocoServico}>
@@ -628,7 +687,6 @@ export default function AcompanhamentoScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* TABELA - Flexível e ajustável */}
         <View style={styles.tabelaContainer}>
           {carregando ? (
             <ActivityIndicator size="large" color="#2980B9" style={{ marginVertical: 50 }} />
@@ -647,7 +705,6 @@ export default function AcompanhamentoScreen() {
                   <Text style={[styles.th, { width: 90, textAlign: 'right' }]}>Total</Text>
                 </View>
 
-                {/* Linhas são renderizadas diretamente aqui, permitindo que o ScrollView PAI cuide do scroll vertical! */}
                 {registros.map((item, index) => (
                   <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
                     <Text style={[styles.td, { width: 150, fontWeight: 'bold' }]} numberOfLines={1}>

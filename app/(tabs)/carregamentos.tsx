@@ -136,6 +136,7 @@ export default function CarregamentosScreen() {
 
   const totalTamboresCarga = itensCarga.reduce((acc, curr) => acc + parseInt(curr.quantidade || '0'), 0);
 
+  // 🧮 CALCULO AUTOMÁTICO DE PESO LÍQUIDO
   useEffect(() => {
     const b = parseFloat(pesoBruto.replace(',', '.')) || 0;
     const t = parseFloat(tara.replace(',', '.')) || 0;
@@ -145,6 +146,7 @@ export default function CarregamentosScreen() {
     }
   }, [pesoBruto, tara]);
 
+  // 🧮 CALCULO AUTOMÁTICO DE MÉDIA DE TAMBOR
   useEffect(() => {
     const pesoNum = parseFloat(pesoLiquidoTotal.replace(',', '.')) || 0;
     if (totalTamboresCarga > 0 && pesoNum > 0) {
@@ -155,6 +157,7 @@ export default function CarregamentosScreen() {
     }
   }, [itensCarga, pesoLiquidoTotal]);
 
+  // 🧮 CALCULO AUTOMÁTICO DO VOLUME DA MADEIRA
   useEffect(() => {
     const a = parseFloat(alturaMedia.replace(',', '.')) || 0;
     const l = parseFloat(largura.replace(',', '.')) || 0;
@@ -222,16 +225,34 @@ export default function CarregamentosScreen() {
     return v;
   };
 
+  // 🟢 CORRETOR DE DATAS: Previne o ano com 2 dígitos de explodir o banco
   const converterDataBanco = (dataBR: string) => {
+    if (!dataBR) return null;
     const p = dataBR.split('/');
-    if (p.length === 3) return `${p[2]}-${p[1]}-${p[0]}`;
+    if (p.length === 3) {
+      let ano = p[2];
+      if (ano.length === 2) ano = `20${ano}`; // Se digitar 26, vira 2026.
+      return `${ano}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+    }
     return null;
+  };
+
+  // 🟢 UTILITÁRIO PARA CORRIGIR DATAS PRESAS NA FILA OFFLINE
+  const corrigirDataFila = (dataOriginal: string) => {
+    if (!dataOriginal) return dataOriginal;
+    const partes = dataOriginal.split('-');
+    // Se o banco tentar enviar "26-08-05", conserta para "2026-08-05"
+    if (partes.length === 3 && partes[0].length === 2) {
+      return `20${partes[0]}-${partes[1]}-${partes[2]}`;
+    }
+    return dataOriginal;
   };
 
   const adicionarItem = () => {
     if (!itemFazenda) {
       return Alert.alert("Aviso", "Selecione a Fazenda!");
     }
+    // Se for Goma Resina, a quantidade é obrigatória
     if (tipoCarga !== 'Madeira' && !itemQuantidade) {
       return Alert.alert("Aviso", "Informe a Quantidade de Tambores!");
     }
@@ -251,6 +272,7 @@ export default function CarregamentosScreen() {
     setItensCarga(itensCarga.filter(i => i.id_temp !== idTemp));
   };
 
+  // 🟢 SALVAR CARREGAMENTO (EXPEDIÇÃO)
   const salvarCarregamento = async () => {
     if (!dataSaida || !numeroRomaneio) return Alert.alert("Aviso", "Preencha a Data e o Nº do Romaneio!");
     if (itensCarga.length === 0) return Alert.alert("Aviso", "Adicione pelo menos uma Fazenda de origem (Lote)!");
@@ -332,6 +354,7 @@ export default function CarregamentosScreen() {
     }
   };
 
+  // 🟢 SALVAR REMOÇÃO
   const salvarRemocao = async () => {
     if (!dataRemocao || !fazendaRemocao || !quadraRemocao || !qtdRemocao) {
       return Alert.alert("Aviso", "Preencha Data, Fazenda, Quadra e a Quantidade de tambores!");
@@ -378,21 +401,31 @@ export default function CarregamentosScreen() {
     setSincronizando(true);
 
     try {
+      // Sincroniza Carregamentos
       if (carregamentosPendentes.length > 0) {
         for (const item of carregamentosPendentes) {
           if (item.isEdit && item.romaneioOriginal) {
             await supabase.from('carregamentos').delete().eq('numero_romaneio', item.romaneioOriginal);
           }
-          const { error } = await supabase.from('carregamentos').insert(item.payload);
+          // 🟢 VACINA DATA: Arruma a data caso tenha sido salva com o ano com 2 dígitos
+          const payloadVacinado = item.payload.map((p: any) => ({
+            ...p,
+            data_saida: corrigirDataFila(p.data_saida)
+          }));
+
+          const { error } = await supabase.from('carregamentos').insert(payloadVacinado);
           if (error) throw new Error(`Carregamento: ${error.message}`);
         }
         await AsyncStorage.removeItem('@carregamentos_off');
         setCarregamentosPendentes([]);
       }
 
+      // Sincroniza Remoções
       if (remocoesPendentes.length > 0) {
+        // 🟢 VACINA DATA E CAMPOS OBRIGATÓRIOS
         const remocoesCorrigidas = remocoesPendentes.map(item => ({
           ...item,
+          data: corrigirDataFila(item.data),
           colaborador: item.colaborador || 'EQUIPE DE REMOÇÃO',
           ramal: item.ramal || '-',
           valor_unitario: item.valor_unitario || 0,

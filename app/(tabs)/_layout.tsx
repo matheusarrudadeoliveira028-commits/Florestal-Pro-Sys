@@ -134,7 +134,7 @@ export default function DrawerLayout() {
           drawerLabel: 'Acompanhamento',
           title: 'Acompanhamento',
           drawerIcon: ({ color, size }) => <Ionicons name="analytics" size={size} color={color} />,
-          drawerItemStyle: ocultarVisul('acompanhamento') 
+          drawerItemStyle: ocultarVisul('AcompanhamentoScreen') 
         }}
       />
 
