@@ -202,7 +202,8 @@ export default function RelatoriosScreen() {
   const carregarFiscais = async () => {
     const { data } = await supabase.from('diarios_campo').select('fiscal_nome');
     if (data) {
-      const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))];
+      // 🟢 IGNORA O NOME "SISTEMA" NA LISTA DE FISCAIS
+      const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))].filter(nome => nome !== 'SISTEMA');
       setListaFiscais(unicos.sort() as string[]);
     }
   };
@@ -293,7 +294,11 @@ export default function RelatoriosScreen() {
       const { data: lancamentosData, error: errLanc } = await query;
       if (errLanc) throw errLanc;
 
-      const lancamentos = lancamentosData || [];
+      // 🟢 IGNORA OS LANÇAMENTOS DO ROBÔ DE REMOÇÃO
+      const lancamentos = (lancamentosData || []).filter((item: any) => 
+        String(item.colaborador).toUpperCase() !== 'EQUIPE DE REMOÇÃO' &&
+        String(item.servico).toUpperCase() !== 'REMOÇÃO'
+      );
 
       if (lancamentos.length === 0 && colaboradorSelecionado === 'TODOS' && fiscalSelecionado === 'TODOS') {
         setGerando(false);
