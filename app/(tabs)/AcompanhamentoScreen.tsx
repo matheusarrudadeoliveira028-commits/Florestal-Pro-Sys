@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
@@ -126,7 +127,6 @@ export default function AcompanhamentoScreen() {
         setPerfilUsuario(usuarioData.cargo);
         setNomeUsuarioLogado(usuarioData.nome);
 
-        // 🟢 Se for Fiscal, trava o estado automaticamente nele
         if (usuarioData.cargo === 'Fiscal de Campo') {
           setFiscalSelecionado(user.id);
         }
@@ -165,7 +165,19 @@ export default function AcompanhamentoScreen() {
 
     setCarregando(true);
     try {
-      // 🟢 DEFINE QUEM É O FISCAL COM BASE NO PERFIL
+      // 🟢 BUSCA O VALOR DO ATESTADO SALVO NA MEMÓRIA DO CELULAR
+      let valorAtestadoNum = 0;
+      try {
+        const valSalvo = await AsyncStorage.getItem('@valor_atestado');
+        if (valSalvo) {
+          valorAtestadoNum = parseFloat(valSalvo.replace(',', '.')) || 0;
+        }
+      } catch (e) {}
+
+      // 🟢 PEGA O DIA DA DATA SELECIONADA PARA SABER SE É PRIMEIRA QUINZENA
+      const diaMesNum = parseInt(dataSelecionada.split('/')[0], 10);
+
+      // DEFINE QUEM É O FISCAL COM BASE NO PERFIL
       let fiscalNomeQuery = '';
       let fiscalIdQuery = 'TODOS';
 
@@ -234,22 +246,36 @@ export default function AcompanhamentoScreen() {
       setTotalAtestados(quemAtestado.length);
 
       // =========================================================
-      // PROCESSAMENTO DA TABELA E RESUMO
+      // PROCESSAMENTO DA TABELA E RESUMO COM ATESTADO INTELIGENTE
       // =========================================================
       if (data) {
         const registrosAgrupados = data.reduce((acc: any, item: any) => {
-          const chave = `${item.colaborador}_${item.servico}_${item.fazenda}_${item.quadra}_${item.valor_unitario}`;
+          const isAtestado = String(item.servico || '').toUpperCase().includes('ATESTADO');
+          
+          let vUnit = Number(item.valor_unitario) || 0;
+          let vTot = Number(item.valor_total) || 0;
+          let qtd = Number(item.quantidade) || 0;
+
+          // 🟢 INJEÇÃO DO VALOR DO ATESTADO SE FOR NA PRIMEIRA QUINZENA!
+          if (isAtestado && diaMesNum <= 15) {
+            vUnit = valorAtestadoNum;
+            vTot = valorAtestadoNum;
+            if (qtd === 0) qtd = 1; 
+          }
+
+          const chave = `${item.colaborador}_${item.servico}_${item.fazenda}_${item.quadra}_${vUnit}`;
           
           if (!acc[chave]) {
             acc[chave] = {
               ...item,
-              quantidade: Number(item.quantidade) || 0,
-              valor_total: Number(item.valor_total) || 0,
+              quantidade: qtd,
+              valor_unitario: vUnit,
+              valor_total: vTot,
               ramais: item.ramal ? [String(item.ramal)] : []
             };
           } else {
-            acc[chave].quantidade += Number(item.quantidade) || 0;
-            acc[chave].valor_total += Number(item.valor_total) || 0;
+            acc[chave].quantidade += qtd;
+            acc[chave].valor_total += vTot;
             if (item.ramal) {
               acc[chave].ramais.push(String(item.ramal));
             }
