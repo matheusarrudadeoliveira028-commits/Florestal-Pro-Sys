@@ -58,7 +58,7 @@ export default function RelatoriosScreen() {
   const [feriados, setFeriados] = useState('');
   const [filtroAtivo, setFiltroAtivo] = useState('');
   
-  // 🟢 ESTADO: VALOR DO ATESTADO
+  // 🟢 ESTADO: VALOR DO ATESTADO (Agora serve de fallback apenas para o legado)
   const [valorAtestado, setValorAtestado] = useState('');
 
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
@@ -202,7 +202,6 @@ export default function RelatoriosScreen() {
   const carregarFiscais = async () => {
     const { data } = await supabase.from('diarios_campo').select('fiscal_nome');
     if (data) {
-      // 🟢 IGNORA O NOME "SISTEMA" NA LISTA DE FISCAIS
       const unicos = [...new Set(data.map(item => item.fiscal_nome).filter(Boolean))].filter(nome => nome !== 'SISTEMA');
       setListaFiscais(unicos.sort() as string[]);
     }
@@ -294,7 +293,6 @@ export default function RelatoriosScreen() {
       const { data: lancamentosData, error: errLanc } = await query;
       if (errLanc) throw errLanc;
 
-      // 🟢 IGNORA OS LANÇAMENTOS DO ROBÔ DE REMOÇÃO
       const lancamentos = (lancamentosData || []).filter((item: any) => 
         String(item.colaborador).toUpperCase() !== 'EQUIPE DE REMOÇÃO' &&
         String(item.servico).toUpperCase() !== 'REMOÇÃO'
@@ -362,9 +360,19 @@ export default function RelatoriosScreen() {
         return Alert.alert('Aviso', 'Nenhum lançamento encontrado para gerar.');
       }
 
+      // 🟢 FUNÇÃO INTELIGENTE: Detecta qualquer tipo de Ausência/Licença
+      const verificarSeAusencia = (servicoNome: string) => {
+        if (!servicoNome) return false;
+        const s = servicoNome.toUpperCase();
+        return s.includes('ATESTADO') || 
+               s.includes('ABONO') || 
+               s.includes('ABONADO') || 
+               s.includes('DECLARAÇÃO') || 
+               s.includes('AFASTAMENTO') || 
+               s.includes('LICENÇA');
+      };
+
       let paginasHTML = '';
-      
-      // 🟢 DATA DE HOJE (Para não gerar falta em dias no futuro)
       const dataHojeIso = formatarDataIso(new Date());
 
       chavesFolhas.forEach((chave, index) => {
@@ -402,28 +410,28 @@ export default function RelatoriosScreen() {
           const diaMesStr = isoDate.split('-')[2];
           const diaMesNum = parseInt(diaMesStr, 10);
 
+          // Filtra para remover da tabela normal qualquer coisa que seja Ausência/Licença
           const registrosDoDia = folha.registros.filter((r: any) => {
             const dataLancamento = padronizarDataDoBanco(r.data);
-            const isAtestado = r.servico && r.servico.toUpperCase().includes('ATESTADO');
-            return dataLancamento === isoDate && !isAtestado;
+            return dataLancamento === isoDate && !verificarSeAusencia(r.servico);
           });
 
-          const atestadoVigente = folha.registros.find((r: any) => {
-            const isAtestado = r.servico && r.servico.toUpperCase().includes('ATESTADO');
-            if (!isAtestado) return false;
+          // Varre os registros para ver se esse dia cai dentro do período de alguma Ausência
+          const ausenciaVigente = folha.registros.find((r: any) => {
+            if (!verificarSeAusencia(r.servico)) return false;
 
-            const dataInicioAtestado = padronizarDataDoBanco(r.data_atestado || r.data);
-            if (!dataInicioAtestado) return false;
+            const dataInicioAusencia = padronizarDataDoBanco(r.data_atestado || r.data);
+            if (!dataInicioAusencia) return false;
 
             const dias = parseInt(r.dias_atestado, 10) || 1;
             
-            const pIniAtestado = dataInicioAtestado.split('-');
-            const dtFimAtestado = new Date(parseInt(pIniAtestado[0], 10), parseInt(pIniAtestado[1], 10) - 1, parseInt(pIniAtestado[2], 10));
-            dtFimAtestado.setDate(dtFimAtestado.getDate() + dias - 1); 
+            const pIniAusencia = dataInicioAusencia.split('-');
+            const dtFimAusencia = new Date(parseInt(pIniAusencia[0], 10), parseInt(pIniAusencia[1], 10) - 1, parseInt(pIniAusencia[2], 10));
+            dtFimAusencia.setDate(dtFimAusencia.getDate() + dias - 1); 
             
-            const dataFimAtestadoStr = formatarDataIso(dtFimAtestado);
+            const dataFimAusenciaStr = formatarDataIso(dtFimAusencia);
 
-            return isoDate >= dataInicioAtestado && isoDate <= dataFimAtestadoStr;
+            return isoDate >= dataInicioAusencia && isoDate <= dataFimAusenciaStr;
           });
 
           if (registrosDoDia.length > 0) {
@@ -482,36 +490,47 @@ export default function RelatoriosScreen() {
             
             const isAntesAdmissao = dataAdmissaoIsoStr !== null && (isoDate < dataAdmissaoIsoStr);
             
-            // 🟢 SE A DATA DO LOOP FOR MAIOR QUE HOJE, É FUTURO
             const isFuturo = isoDate > dataHojeIso;
             
-            // Se for antes da admissão ou no futuro, a linha fica totalmente em branco
             if (isAntesAdmissao || isFuturo) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #F4F6F6;"></td></tr>`;
             } else if (diaDaSemana === 0) { 
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EAEDED; color: #7F8C8D; font-weight: bold; letter-spacing: 2px;">DOMINGO</td></tr>`;
             } else if (isFerias) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FEF9E7; color: #F39C12; font-weight: bold; letter-spacing: 2px;">FÉRIAS</td></tr>`;
-            } else if (atestadoVigente) { 
-              let valorDiaAtestado = 0;
+            } else if (ausenciaVigente) { 
               
-              if (diaMesNum <= 15) {
-                valorDiaAtestado = parseFloat(valorAtestado.replace(',', '.')) || 0;
+              // O valor padrão agora vem DIRETAMENTE do banco de dados para todas as ausências!
+              let valorDiaAusencia = parseFloat(ausenciaVigente.valor_unitario) || 0;
+              
+              const isAtestado = ausenciaVigente.servico.toUpperCase().includes('ATESTADO');
+              const isSistemaNovo = ausenciaVigente.observacao === 'SISTEMA_NOVO';
+
+              // 🟢 REGRA DE LEGADO ABSOLUTA: 
+              // Apenas Atestados antigos (que NÃO tem a marcação SISTEMA_NOVO) vão receber o valor forçado da tela.
+              if (isAtestado && !isSistemaNovo) {
+                if (diaMesNum <= 15) {
+                  valorDiaAusencia = parseFloat(valorAtestado.replace(',', '.')) || 0;
+                } else {
+                  valorDiaAusencia = 0;
+                }
               }
 
-              totalGeral += valorDiaAtestado;
+              totalGeral += valorDiaAusencia;
 
-              if (valorDiaAtestado > 0) {
-                const valorAtdStr = valorDiaAtestado.toFixed(2).replace('.', ',');
+              const nomeServicoUI = ausenciaVigente.servico.toUpperCase();
+
+              if (valorDiaAusencia > 0) {
+                const valorAtdStr = valorDiaAusencia.toFixed(2).replace('.', ',');
                 linhasTabela += `
                   <tr>
                     <td><strong>${diaMesStr}</strong></td>
-                    <td colspan="5" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">ATESTADO</td>
+                    <td colspan="5" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">${nomeServicoUI}</td>
                     <td style="background-color: #D6EAF8; color: #2980B9;">${valorAtdStr}</td>
                     <td style="background-color: #D6EAF8; color: #2980B9; font-weight: bold;">R$ ${valorAtdStr}</td>
                   </tr>`;
               } else {
-                linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">ATESTADO</td></tr>`;
+                linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #D6EAF8; color: #2980B9; font-weight: bold; letter-spacing: 2px;">${nomeServicoUI}</td></tr>`;
               }
 
             } else if (isFeriado) {
@@ -696,14 +715,17 @@ export default function RelatoriosScreen() {
 
         {filtroAtivo !== '2Q' && (
           <>
-            <Text style={styles.label}>Valor da Diária de Atestado (1ª Quinzena):</Text>
+            <Text style={styles.label}>Valor Padrão p/ Legado (1ª Quinzena):</Text>
             <TextInput 
               style={styles.input} 
               value={valorAtestado} 
               onChangeText={salvarValorAtestado} 
-              placeholder="Ex: 50,00" 
+              placeholder="Ex: 61,51" 
               keyboardType="numeric" 
             />
+            <Text style={{fontSize: 10, color: '#7F8C8D', marginBottom: 10, marginTop: -5}}>
+              *Este campo é usado apenas para preencher o valor de atestados antigos que não tinham preço salvo na linha.
+            </Text>
           </>
         )}
 

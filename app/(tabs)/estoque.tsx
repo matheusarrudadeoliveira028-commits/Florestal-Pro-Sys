@@ -9,6 +9,7 @@ import { supabase } from '../../src/supabase';
 // =========================================================================
 const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
   const [expandidoEntradas, setExpandidoEntradas] = useState(false);
+  const [expandidoRemocoes, setExpandidoRemocoes] = useState(false);
   const [expandidoSaidas, setExpandidoSaidas] = useState(false);
 
   return (
@@ -25,35 +26,47 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
         </View>
       </View>
 
+      {/* BLOCO 1: VISÃO FLORESTA */}
       <View style={styles.linhaValores}>
-        <View style={styles.colunaValor}>
-          <Text style={styles.labelValor}>Estoque Ant.</Text>
+        <View style={styles.colunaValor3}>
+          <Text style={styles.labelValor}>Anterior</Text>
           <Text style={[styles.textoValor, { color: '#8E44AD' }]}>{item.anterior}</Text>
         </View>
-        <View style={styles.colunaValor}>
+        <View style={styles.colunaValor3}>
           <Text style={styles.labelValor}>Coletados</Text>
           <Text style={[styles.textoValor, { color: '#27AE60' }]}>+ {item.entradas}</Text>
         </View>
-        <View style={styles.colunaValor}>
-          <Text style={styles.labelValor}>Expedidos</Text>
-          <Text style={[styles.textoValor, { color: '#E67E22' }]}>- {item.saidas}</Text>
-        </View>
-        <View style={styles.colunaValor}>
-          <Text style={styles.labelValor}>Perdas (Baixa)</Text>
+        <View style={styles.colunaValor3}>
+          <Text style={styles.labelValor}>Perdas</Text>
           <Text style={[styles.textoValor, { color: '#E74C3C' }]}>- {item.baixas}</Text>
         </View>
       </View>
 
-      {/* BARRA DE SALDO DESTAQUE */}
-      <View style={[styles.barraSaldo, { backgroundColor: item.saldo < 0 ? '#FDEDEC' : '#E8F8F5', borderColor: item.saldo < 0 ? '#FADBD8' : '#D5F5E3' }]}>
-        <Text style={[styles.labelSaldoTotal, { color: item.saldo < 0 ? '#C0392B' : '#1E8449' }]}>SALDO ATUAL:</Text>
-        <Text style={[styles.valorSaldoTotal, { color: item.saldo < 0 ? '#E74C3C' : '#27AE60' }]}>
-          {item.saldo} Tambores
-        </Text>
+      {/* BLOCO 2: VISÃO LOGÍSTICA (PÁTIO) */}
+      <View style={[styles.linhaValores, { marginTop: 0 }]}>
+        <View style={styles.colunaValor2}>
+          <Text style={styles.labelValor}>Removidos (Para o Pátio)</Text>
+          <Text style={[styles.textoValor, { color: '#2980B9' }]}>+ {item.removidos} tbrs</Text>
+        </View>
+        <View style={styles.colunaValor2}>
+          <Text style={styles.labelValor}>Expedidos (Carregados)</Text>
+          <Text style={[styles.textoValor, { color: '#E67E22' }]}>- {item.saidas} tbrs</Text>
+        </View>
+      </View>
+
+      {/* BARRAS DE SALDO DESTAQUE */}
+      <View style={[styles.barraSaldo, { backgroundColor: '#F8FAFC', borderColor: '#E0E6ED', marginBottom: 8 }]}>
+        <Text style={[styles.labelSaldoTotal, { color: '#34495E' }]}>TOTAL GERAL (Mato + Pátio):</Text>
+        <Text style={[styles.valorSaldoTotal, { color: '#2C3E50' }]}>{item.saldo} un</Text>
+      </View>
+
+      <View style={[styles.barraSaldo, { backgroundColor: item.saldoPatio < 0 ? '#FDEDEC' : '#EAF2F8', borderColor: item.saldoPatio < 0 ? '#FADBD8' : '#D6EAF8' }]}>
+        <Text style={[styles.labelSaldoTotal, { color: item.saldoPatio < 0 ? '#C0392B' : '#2980B9' }]}>🚜 DISPONÍVEL PARA CARGA (Pátio):</Text>
+        <Text style={[styles.valorSaldoTotal, { color: item.saldoPatio < 0 ? '#E74C3C' : '#2980B9' }]}>{item.saldoPatio} un</Text>
       </View>
 
       <View style={styles.botoesHistoricoContainer}>
-        {/* 🟢 BOTÃO PARA ABRIR O HISTÓRICO DE ENTRADAS */}
+        {/* 🟢 BOTÃO: HISTÓRICO DE ENTRADAS */}
         {item.historicoEntradas && item.historicoEntradas.length > 0 && (
           <View style={{ marginBottom: 10 }}>
             <TouchableOpacity 
@@ -62,31 +75,30 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
             >
               <Ionicons name={expandidoEntradas ? "chevron-up" : "chevron-down"} size={16} color="#27AE60" />
               <Text style={[styles.txtToggleHistorico, { color: '#27AE60' }]}>
-                {expandidoEntradas ? "Ocultar Histórico de Coletas" : "Ver Histórico de Coletas"}
+                {expandidoEntradas ? "Ocultar Coletas" : "Ver Histórico de Coletas"}
               </Text>
             </TouchableOpacity>
 
             {expandidoEntradas && (
               <View style={[styles.containerHistorico, { borderColor: '#A9DFBF' }]}>
-                <Text style={styles.tituloHistorico}>📥 Detalhamento de Coletas (Entradas)</Text>
+                <Text style={styles.tituloHistorico}>📥 Detalhamento de Coletas (Mato)</Text>
                 {item.historicoEntradas.map((entrada: any, idx: number) => {
                   let dataFormatada = 'Data N/I';
                   if (entrada.data) {
                     const d = entrada.data.split('T')[0].split('-');
                     if (d.length === 3) dataFormatada = `${d[2]}/${d[1]}/${d[0]}`;
                   }
-
                   return (
                     <View key={`ent-${idx}`} style={styles.itemHistorico}>
                       <View style={styles.historicoIcone}>
-                        <Ionicons name="arrow-down-circle" size={20} color="#27AE60" />
+                        <Ionicons name="leaf" size={20} color="#27AE60" />
                       </View>
                       <View style={styles.historicoDados}>
                         <Text style={styles.historicoData}>{dataFormatada}</Text>
-                        <Text style={styles.historicoRomaneio}>Colaborador: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{entrada.colaborador}</Text></Text>
+                        <Text style={styles.historicoRomaneio}>Colab: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{entrada.colaborador}</Text></Text>
                       </View>
                       <View style={[styles.historicoQtd, { backgroundColor: '#E8F8F5' }]}>
-                        <Text style={[styles.historicoQtdValor, { color: '#27AE60' }]}>+ {entrada.quantidade} tbrs</Text>
+                        <Text style={[styles.historicoQtdValor, { color: '#27AE60' }]}>+ {entrada.quantidade}</Text>
                       </View>
                     </View>
                   );
@@ -96,7 +108,49 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
           </View>
         )}
 
-        {/* 🟢 BOTÃO PARA ABRIR O HISTÓRICO DE SAÍDAS */}
+        {/* 🟢 BOTÃO: HISTÓRICO DE REMOÇÕES */}
+        {item.historicoRemocoes && item.historicoRemocoes.length > 0 && (
+          <View style={{ marginBottom: 10 }}>
+            <TouchableOpacity 
+              style={[styles.btnToggleHistorico, { backgroundColor: '#EBF5FB', borderColor: '#AED6F1' }]} 
+              onPress={() => setExpandidoRemocoes(!expandidoRemocoes)}
+            >
+              <Ionicons name={expandidoRemocoes ? "chevron-up" : "chevron-down"} size={16} color="#2980B9" />
+              <Text style={[styles.txtToggleHistorico, { color: '#2980B9' }]}>
+                {expandidoRemocoes ? "Ocultar Remoções" : "Ver Histórico de Remoções (Pátio)"}
+              </Text>
+            </TouchableOpacity>
+
+            {expandidoRemocoes && (
+              <View style={[styles.containerHistorico, { borderColor: '#AED6F1' }]}>
+                <Text style={styles.tituloHistorico}>🚜 Detalhamento de Remoções</Text>
+                {item.historicoRemocoes.map((remocao: any, idx: number) => {
+                  let dataFormatada = 'Data N/I';
+                  if (remocao.data) {
+                    const d = remocao.data.split('T')[0].split('-');
+                    if (d.length === 3) dataFormatada = `${d[2]}/${d[1]}/${d[0]}`;
+                  }
+                  return (
+                    <View key={`rem-${idx}`} style={styles.itemHistorico}>
+                      <View style={styles.historicoIcone}>
+                        <MaterialCommunityIcons name="tractor" size={20} color="#2980B9" />
+                      </View>
+                      <View style={styles.historicoDados}>
+                        <Text style={styles.historicoData}>{dataFormatada}</Text>
+                        <Text style={styles.historicoRomaneio}>Quadra: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{remocao.quadra}</Text></Text>
+                      </View>
+                      <View style={[styles.historicoQtd, { backgroundColor: '#EAF2F8' }]}>
+                        <Text style={[styles.historicoQtdValor, { color: '#2980B9' }]}>+ {remocao.quantidade}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* 🟢 BOTÃO: HISTÓRICO DE SAÍDAS */}
         {item.historicoSaidas && item.historicoSaidas.length > 0 && (
           <View>
             <TouchableOpacity 
@@ -105,31 +159,30 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
             >
               <Ionicons name={expandidoSaidas ? "chevron-up" : "chevron-down"} size={16} color="#E67E22" />
               <Text style={[styles.txtToggleHistorico, { color: '#E67E22' }]}>
-                {expandidoSaidas ? "Ocultar Histórico de Expedições" : "Ver Histórico de Expedições"}
+                {expandidoSaidas ? "Ocultar Expedições" : "Ver Histórico de Expedições (Carga)"}
               </Text>
             </TouchableOpacity>
 
             {expandidoSaidas && (
               <View style={[styles.containerHistorico, { borderColor: '#F5CBA7' }]}>
-                <Text style={styles.tituloHistorico}>🚚 Detalhamento de Expedições (Saídas)</Text>
+                <Text style={styles.tituloHistorico}>🚚 Detalhamento de Expedições</Text>
                 {item.historicoSaidas.map((saida: any, idx: number) => {
                   let dataFormatada = 'Data N/I';
                   if (saida.data) {
                     const d = saida.data.split('T')[0].split('-');
                     if (d.length === 3) dataFormatada = `${d[2]}/${d[1]}/${d[0]}`;
                   }
-
                   return (
                     <View key={`sai-${idx}`} style={styles.itemHistorico}>
                       <View style={styles.historicoIcone}>
-                        <Ionicons name="arrow-undo-circle" size={20} color="#E67E22" />
+                        <MaterialCommunityIcons name="truck-fast" size={20} color="#E67E22" />
                       </View>
                       <View style={styles.historicoDados}>
                         <Text style={styles.historicoData}>{dataFormatada}</Text>
-                        <Text style={styles.historicoRomaneio}>ID/Romaneio: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{saida.romaneio}</Text></Text>
+                        <Text style={styles.historicoRomaneio}>Romaneio: <Text style={{fontWeight: 'bold', color: '#2C3E50'}}>{saida.romaneio}</Text></Text>
                       </View>
                       <View style={[styles.historicoQtd, { backgroundColor: '#FDEDEC' }]}>
-                        <Text style={[styles.historicoQtdValor, { color: '#C0392B' }]}>- {saida.quantidade} tbrs</Text>
+                        <Text style={[styles.historicoQtdValor, { color: '#C0392B' }]}>- {saida.quantidade}</Text>
                       </View>
                     </View>
                   );
@@ -151,6 +204,7 @@ export default function EstoqueDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [totalGlobal, setTotalGlobal] = useState(0);
+  const [totalPatioGlobal, setTotalPatioGlobal] = useState(0);
 
   // Estados para o Filtro de Data
   const [dataInicial, setDataInicial] = useState('');
@@ -218,8 +272,12 @@ export default function EstoqueDashboard() {
         const key = `${fz}|${res}`;
         if (!mapaEstoque[key]) {
           mapaEstoque[key] = { 
-            fazenda: fz, resina: res, entradas: 0, anterior: 0, 
-            saidas: 0, baixas: 0, saldo: 0, historicoEntradas: [], historicoSaidas: [] 
+            fazenda: fz, resina: res, 
+            entradas: 0, anterior: 0, 
+            removidos: 0, removidosAnterior: 0, 
+            saidas: 0, saidasAnterior: 0, baixas: 0, 
+            saldo: 0, saldoPatio: 0,
+            historicoEntradas: [], historicoRemocoes: [], historicoSaidas: [] 
           };
         }
         return key;
@@ -239,15 +297,19 @@ export default function EstoqueDashboard() {
 
       (entradas || []).forEach((item) => {
         const nomeServico = item.servico ? String(item.servico).toLowerCase() : '';
-        if (nomeServico.includes('coleta')) {
+        const isColeta = nomeServico.includes('coleta');
+        const isRemocao = nomeServico.includes('remo') || String(item.colaborador).toUpperCase() === 'EQUIPE DE REMOÇÃO';
+
+        if (isColeta || isRemocao) {
           const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
           
-          let res = item.tipo_resina;
-          if (!res && item.servico && String(item.servico).includes('-')) {
-            res = String(item.servico).split('-').pop()?.trim().toUpperCase();
+          let res = item.tipo_resina || '-';
+          if (res === '-' || res === 'INDEFINIDA') {
+             const existingKey = Object.keys(mapaEstoque).find(k => k.startsWith(`${fz}|`) && !k.endsWith('|-'));
+             res = existingKey ? existingKey.split('|')[1] : 'ELLIOTTI';
           }
-          res = res || 'INDEFINIDA';
-          
+          res = res.toUpperCase();
+
           const key = inicializarChave(fz, res);
           const qtd = Number(item.quantidade) || 0;
 
@@ -255,20 +317,26 @@ export default function EstoqueDashboard() {
           const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
 
           if (dataItemObj < dtIniObj) {
-            mapaEstoque[key].anterior += qtd;
+            if (isColeta) mapaEstoque[key].anterior += qtd;
+            if (isRemocao) mapaEstoque[key].removidosAnterior += qtd;
           } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
-            mapaEstoque[key].entradas += qtd;
-            mapaEstoque[key].historicoEntradas.push({
-              data: dataItemStr,
-              colaborador: item.colaborador || 'Não Identificado',
-              quantidade: qtd
-            });
+            if (isColeta) {
+              mapaEstoque[key].entradas += qtd;
+              mapaEstoque[key].historicoEntradas.push({
+                data: dataItemStr, colaborador: item.colaborador || 'Não Identificado', quantidade: qtd
+              });
+            }
+            if (isRemocao) {
+              mapaEstoque[key].removidos += qtd;
+              mapaEstoque[key].historicoRemocoes.push({
+                data: dataItemStr, quadra: item.quadra || '-', quantidade: qtd
+              });
+            }
           }
         }
       });
 
       (saidas || []).forEach((item) => {
-        // 🟢 REGRA ADICIONADA: Ignora completamente os carregamentos de Madeira!
         if (item.tipo_carga && String(item.tipo_carga).toUpperCase() === 'MADEIRA') return;
 
         const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
@@ -281,6 +349,7 @@ export default function EstoqueDashboard() {
 
         if (dataItemObj < dtIniObj) {
             mapaEstoque[key].anterior -= qtd;
+            mapaEstoque[key].saidasAnterior += qtd;
         } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
             mapaEstoque[key].saidas += qtd;
             mapaEstoque[key].historicoSaidas.push({
@@ -308,25 +377,34 @@ export default function EstoqueDashboard() {
       });
 
       let total = 0;
+      let patioTotal = 0;
+
       const resultadoFinal = Object.values(mapaEstoque).map((item) => {
+        // Saldo Geral (O que tem lá dentro da floresta + pátio)
         const saldo = (item.entradas + item.anterior) - (item.saidas + item.baixas);
+        
+        // 🟢 CORREÇÃO DA LÓGICA DO PÁTIO:
+        // O "Estoque Anterior" lançado manualmente conta como saldo disponível no pátio,
+        // para que a saída/carregamento não deixe o pátio negativo.
+        const totalHistoricoPatio = item.anterior + item.removidosAnterior - item.saidasAnterior;
+        let saldoPatio = totalHistoricoPatio + item.removidos - item.saidas;
+
+        // Travas de segurança: o pátio não pode ser negativo nem maior que o saldo geral da fazenda
+        if (saldoPatio < 0) saldoPatio = 0;
+        if (saldoPatio > saldo) saldoPatio = saldo;
+
         total += saldo;
+        patioTotal += saldoPatio;
 
-        item.historicoEntradas.sort((a: any, b: any) => {
-          if (!a.data || !b.data) return 0;
-          return new Date(b.data).getTime() - new Date(a.data).getTime();
-        });
+        item.historicoEntradas.sort((a: any, b: any) => new Date(b.data).getTime() - new Date(a.data).getTime());
+        item.historicoRemocoes.sort((a: any, b: any) => new Date(b.data).getTime() - new Date(a.data).getTime());
+        item.historicoSaidas.sort((a: any, b: any) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
-        item.historicoSaidas.sort((a: any, b: any) => {
-          if (!a.data || !b.data) return 0;
-          return new Date(b.data).getTime() - new Date(a.data).getTime();
-        });
-
-        return { ...item, saldo };
+        return { ...item, saldo, saldoPatio };
       });
 
-      // 🟢 Oculta os cartões que não tiveram nenhuma movimentação e saldo zero (pra limpar a tela)
-      const estoqueLimpo = resultadoFinal.filter(i => i.saldo !== 0 || i.entradas !== 0 || i.saidas !== 0 || i.baixas !== 0 || i.anterior !== 0);
+      // Oculta os cartões zerados
+      const estoqueLimpo = resultadoFinal.filter(i => i.saldo !== 0 || i.entradas !== 0 || i.saidas !== 0 || i.baixas !== 0 || i.anterior !== 0 || i.removidos !== 0);
 
       estoqueLimpo.sort((a, b) => {
         if (a.fazenda === b.fazenda) return b.saldo - a.saldo;
@@ -335,6 +413,7 @@ export default function EstoqueDashboard() {
 
       setEstoque(estoqueLimpo);
       setTotalGlobal(total);
+      setTotalPatioGlobal(patioTotal);
     } catch (error) {
       console.log('Erro ao calcular estoque:', error);
     } finally {
@@ -420,7 +499,7 @@ export default function EstoqueDashboard() {
       <View style={styles.headerDashboard}>
         <View>
           <Text style={styles.tituloPainel}>Painel de Estoque</Text>
-          <Text style={styles.descricaoPainel}>Controle por Fazenda e Resina</Text>
+          <Text style={styles.descricaoPainel}>Controle de Floresta e Pátio</Text>
         </View>
         <TouchableOpacity style={styles.botaoAtualizar} onPress={onRefresh} activeOpacity={0.7}>
           <Ionicons name="refresh" size={18} color="#FFF" style={{ marginRight: 5 }} />
@@ -470,10 +549,14 @@ export default function EstoqueDashboard() {
       </View>
 
       <View style={styles.cardGlobal}>
-        <Ionicons name="cube" size={40} color="#FFF" />
-        <View style={{ marginLeft: 15 }}>
-          <Text style={styles.tituloGlobal}>Estoque Global Disponível</Text>
-          <Text style={styles.valorGlobal}>{totalGlobal.toLocaleString('pt-BR')} Tambores</Text>
+        <View style={{flex: 1}}>
+          <Text style={styles.tituloGlobal}>Total Geral (Florestas + Pátios)</Text>
+          <Text style={styles.valorGlobal}>{totalGlobal.toLocaleString('pt-BR')} un</Text>
+        </View>
+        <View style={{width: 1, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 15}} />
+        <View style={{flex: 1}}>
+          <Text style={styles.tituloGlobal}>Liberado para Carga (Pátios)</Text>
+          <Text style={styles.valorGlobal}>{totalPatioGlobal.toLocaleString('pt-BR')} un</Text>
         </View>
       </View>
 
@@ -593,9 +676,9 @@ const styles = StyleSheet.create({
   textoBotaoAjuste: { color: '#FFF', fontWeight: 'bold', fontSize: 11 },
   textoBotao: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
   
-  cardGlobal: { backgroundColor: '#27AE60', borderRadius: 12, padding: 20, flexDirection: 'row', alignItems: 'center', elevation: 4, marginBottom: 25 },
-  tituloGlobal: { color: '#E8F8F5', fontSize: 16, fontWeight: '600' },
-  valorGlobal: { color: '#FFF', fontSize: 28, fontWeight: 'bold' },
+  cardGlobal: { backgroundColor: '#27AE60', borderRadius: 12, padding: 15, flexDirection: 'row', alignItems: 'center', elevation: 4, marginBottom: 25 },
+  tituloGlobal: { color: '#E8F8F5', fontSize: 13, fontWeight: '600', marginBottom: 4 },
+  valorGlobal: { color: '#FFF', fontSize: 24, fontWeight: 'bold' },
   
   subtitulo: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50', marginBottom: 15, marginLeft: 5 },
   
@@ -607,13 +690,14 @@ const styles = StyleSheet.create({
   textoBadgeResina: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
 
   linhaValores: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 10 },
-  colunaValor: { alignItems: 'center', width: '48%', backgroundColor: '#F8FAFC', paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E6ED', marginBottom: 10 },
-  labelValor: { fontSize: 11, color: '#7F8C8D', marginBottom: 5, fontWeight: 'bold', textTransform: 'uppercase' },
-  textoValor: { fontSize: 17, fontWeight: '800' },
+  colunaValor3: { alignItems: 'center', width: '31%', backgroundColor: '#F8FAFC', paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E6ED', marginBottom: 10 },
+  colunaValor2: { alignItems: 'center', width: '48%', backgroundColor: '#F8FAFC', paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E6ED', marginBottom: 10 },
+  labelValor: { fontSize: 10, color: '#7F8C8D', marginBottom: 5, fontWeight: 'bold', textTransform: 'uppercase', textAlign: 'center' },
+  textoValor: { fontSize: 16, fontWeight: '800' },
   
-  barraSaldo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 8, borderWidth: 1 },
-  labelSaldoTotal: { fontSize: 12, fontWeight: 'bold' },
-  valorSaldoTotal: { fontSize: 18, fontWeight: '900' },
+  barraSaldo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 10, borderRadius: 8, borderWidth: 1 },
+  labelSaldoTotal: { fontSize: 11, fontWeight: 'bold' },
+  valorSaldoTotal: { fontSize: 16, fontWeight: '900' },
 
   botoesHistoricoContainer: { marginTop: 15 },
   btnToggleHistorico: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 6, borderWidth: 1 },
