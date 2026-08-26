@@ -1,7 +1,15 @@
 import { Picker } from '@react-native-picker/picker';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
+
+// 🟢 FUNÇÃO SEGURA PARA NÚMEROS QUEBRADOS (Decimais)
+const converterParaNumero = (valor: any): number => {
+  if (valor === null || valor === undefined || valor === '') return 0;
+  const valorFormatado = String(valor).replace(',', '.');
+  const numeroParsed = parseFloat(valorFormatado);
+  return isNaN(numeroParsed) ? 0 : numeroParsed;
+};
 
 export default function FechamentoScreen() {
   const [colaboradorSelecionado, setColaboradorSelecionado] = useState('');
@@ -18,6 +26,10 @@ export default function FechamentoScreen() {
   const [extrato, setExtrato] = useState<any[]>([]);
   const [carregandoDados, setCarregandoDados] = useState(true);
   const [buscandoExtrato, setBuscandoExtrato] = useState(false);
+
+  // 🟢 PAGINAÇÃO
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const ITENS_POR_PAGINA = 50;
 
   // FILTROS DE DATA
   const [dataInicio, setDataInicio] = useState('');
@@ -47,9 +59,19 @@ export default function FechamentoScreen() {
 
   useEffect(() => {
     if (colaboradorSelecionado) {
-      setDataInicio('');
-      setDataFim('');
-      buscarExtratoColaborador();
+      // 🟢 SUGERE O MÊS ATUAL AUTOMATICAMENTE AO SELECIONAR A PESSOA
+      const hoje = new Date();
+      const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+      const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+
+      const strInicio = primeiroDia.toLocaleDateString('pt-BR');
+      const strFim = ultimoDia.toLocaleDateString('pt-BR');
+
+      setDataInicio(strInicio);
+      setDataFim(strFim);
+      setPaginaAtual(1); // Reseta a página
+
+      buscarExtratoColaborador(strInicio, strFim);
     } else {
       setDadosCompletosUsuario([]);
       setExtrato([]);
@@ -70,7 +92,6 @@ export default function FechamentoScreen() {
   const carregarDadosBase = async () => {
     setCarregandoDados(true);
     
-    // Busca equipes, serviços e mapas para poder editar qualquer coisa
     const { data: colabs } = await supabase.from('colaboradores').select('*').order('nome');
     const { data: servs } = await supabase.from('servicos').select('*').order('nome');
     const { data: mapa } = await supabase.from('mapa_fazendas').select('*');
@@ -85,7 +106,7 @@ export default function FechamentoScreen() {
     setCarregandoDados(false);
   };
 
-  const buscarExtratoColaborador = async () => {
+  const buscarExtratoColaborador = async (inicioFallback?: string, fimFallback?: string) => {
     setBuscandoExtrato(true);
     
     let query = supabase.from('diarios_campo').select('*').order('data', { ascending: false });
@@ -100,7 +121,9 @@ export default function FechamentoScreen() {
       Alert.alert("Erro", "Falha ao buscar os dados.");
     } else if (data) {
       setDadosCompletosUsuario(data);
-      aplicarFiltrosEAtualizarTotais(data, '', ''); 
+      const dInicio = inicioFallback !== undefined ? inicioFallback : dataInicio;
+      const dFim = fimFallback !== undefined ? fimFallback : dataFim;
+      aplicarFiltrosEAtualizarTotais(data, dInicio, dFim); 
     }
     setBuscandoExtrato(false);
   };
@@ -158,6 +181,7 @@ export default function FechamentoScreen() {
   };
 
   const acionarFiltroManual = () => {
+    setPaginaAtual(1); // 🟢 Reseta a paginação ao mudar filtro
     aplicarFiltrosEAtualizarTotais(dadosCompletosUsuario, dataInicio, dataFim);
   };
 
@@ -180,6 +204,7 @@ export default function FechamentoScreen() {
     }
   };
 
+  // FUNÇÕES DE EDIÇÃO 100%
   const abrirEdicao = (item: any) => {
     setItemEditando(item);
     
@@ -187,7 +212,8 @@ export default function FechamentoScreen() {
     setEditFazenda(item.fazenda || '');
     setEditQuadra(item.quadra || '');
     setEditRamal(item.ramal ? item.ramal.toString() : '');
-    setEditQuantidade(item.quantidade ? item.quantidade.toString() : '');
+    // 🟢 Trás a quantidade formatada pro Brasil pra não dar tela branca
+    setEditQuantidade(item.quantidade ? String(item.quantidade).replace('.', ',') : '');
     setEditDiasAtestado(item.dias_atestado ? item.dias_atestado.toString() : '');
 
     try {
@@ -246,13 +272,11 @@ export default function FechamentoScreen() {
       }
 
       const servicoReferencia = listaServicos.find(s => s.nome === editServico);
-      let valUnitario = servicoReferencia?.preco_base ?? itemEditando.valor_unitario;
+      let valUnitario = servicoReferencia?.preco_base || 0;
+      if (servicoReferencia?.tipo_cobranca === 'milheiro') valUnitario = valUnitario / 1000;
       
-      if (servicoReferencia?.tipo_cobranca === 'milheiro') {
-         valUnitario = servicoReferencia.preco_base / 1000;
-      }
-      
-      const qtdNova = parseInt(editQuantidade) || 0;
+      // 🟢 UTILIZA A NOVA LÓGICA BLINDADA AQUI
+      const qtdNova = converterParaNumero(editQuantidade);
 
       updates = {
         servico: editServico,
@@ -275,267 +299,256 @@ export default function FechamentoScreen() {
     } else {
       Alert.alert("✅ Sucesso", "O lançamento foi completamente atualizado!");
       setModalEdicaoVisivel(false);
-      buscarExtratoColaborador(); 
+      buscarExtratoColaborador(); // Recarrega os dados corrigidos na tabela e soma os totais
     }
   };
 
-  // 🟢 COMPONENTE DE RENDERIZAÇÃO INTELIGENTE (Performance Extrema)
-  const renderLancamento = useCallback(({ item }: { item: any }) => {
-    const isFalta = item.servico === 'Falta';
-    const isAtestado = item.servico === 'Atestado';
-    const dataExibicao = item.data ? new Date(item.data) : new Date(item.created_at);
+  // 🟢 ARRAY FINAL QUE SERÁ DESENHADO NA TELA (Só renderiza as 50 x página_atual)
+  const extratoPaginado = extrato.slice(0, paginaAtual * ITENS_POR_PAGINA);
 
-    return (
-      <View style={[styles.lancamentoCard, isFalta ? styles.cardFalta : isAtestado ? styles.cardAtestado : null]}>
-        <View style={styles.lancamentoTopo}>
-          <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0,5)}</Text>
-          <Text style={[styles.lancamentoServico, isFalta ? {color: '#C0392B'} : isAtestado ? {color: '#2980B9'} : null]}>
-            {item.servico}
-          </Text>
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Folha de Pagamento 💰</Text>
+          <Text style={styles.subtitle}>Conferência e Fechamento de Caixa</Text>
         </View>
 
-        {colaboradorSelecionado === 'TODOS' && (
-          <Text style={styles.detalheTexto}>👤 Funcionário: {item.colaborador}</Text>
-        )}
+        <View style={styles.filtroCard}>
+          <Text style={styles.label}>Selecione a Visão:</Text>
+          <View style={styles.pickerContainer}>
+            {carregandoDados ? (
+              <ActivityIndicator color="#34495E" style={{margin: 10}} />
+            ) : (
+              <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado}>
+                <Picker.Item label="Selecione um funcionário ou todos..." value="" />
+                <Picker.Item label="🌟 TODOS OS COLABORADORES (TOTAL GERAL)" value="TODOS" />
+                {listaColaboradores.map(c => <Picker.Item key={c.id} label={c.nome} value={c.nome} />)}
+              </Picker>
+            )}
+          </View>
 
-        {!isFalta && !isAtestado && (
-          <View style={styles.lancamentoDetalhes}>
-            <Text style={styles.detalheTexto}>📍 Fazenda: {item.fazenda} | Qd: {item.quadra} | Rm: {item.ramal}</Text>
-            <View style={styles.linhaValores}>
-              <Text style={styles.detalheQtd}>Qtd: {item.quantidade} pés</Text>
-              <Text style={styles.detalheValor}>+ R$ {item.valor_total.toFixed(2).replace('.', ',')}</Text>
+          {colaboradorSelecionado !== '' && (
+            <View style={styles.blocoDatas}>
+              <Text style={styles.labelData}>Filtrar por Período (Opcional):</Text>
+              <View style={styles.row}>
+                <View style={styles.colData}>
+                  <TextInput 
+                    style={styles.inputData} 
+                    placeholder="De: DD/MM/AAAA" 
+                    placeholderTextColor="#95A5A6"
+                    keyboardType="numeric"
+                    value={dataInicio}
+                    onChangeText={(t) => setDataInicio(formatarDataInput(t))}
+                    maxLength={10}
+                  />
+                </View>
+                <View style={styles.colData}>
+                  <TextInput 
+                    style={styles.inputData} 
+                    placeholder="Até: DD/MM/AAAA" 
+                    placeholderTextColor="#95A5A6"
+                    keyboardType="numeric"
+                    value={dataFim}
+                    onChangeText={(t) => setDataFim(formatarDataInput(t))}
+                    maxLength={10}
+                  />
+                </View>
+              </View>
+              <TouchableOpacity style={styles.btnFiltrar} onPress={acionarFiltroManual}>
+                <Text style={styles.btnFiltrarTexto}>🔍 APLICAR FILTRO E SOMAR</Text>
+              </TouchableOpacity>
             </View>
-          </View>
-        )}
-
-        {isAtestado && (
-          <View style={styles.lancamentoDetalhes}>
-            <Text style={styles.detalheTexto}>🏥 Data: {item.data_atestado || '-'} | Duração: {item.dias_atestado} dias</Text>
-            <Text style={styles.detalheTexto}>🩺 CID: {item.cid_atestado || '-'}</Text>
-          </View>
-        )}
-
-        <View style={styles.acoesRow}>
-          <TouchableOpacity style={styles.btnEditar} onPress={() => abrirEdicao(item)}>
-            <Text style={styles.btnEditarTexto}>✏️ Editar</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.btnExcluir} onPress={() => confirmarExclusao(item.id, item.servico, item.data || item.created_at)}>
-            <Text style={styles.btnExcluirTexto}>🗑️ Excluir</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }, [colaboradorSelecionado]);
-
-  // 🟢 CABEÇALHO DO APLICATIVO (Fixado para não interferir na digitação)
-  const headerElement = (
-    <>
-      <View style={styles.header}>
-        <Text style={styles.title}>Folha de Pagamento 💰</Text>
-        <Text style={styles.subtitle}>Conferência e Fechamento de Caixa</Text>
-      </View>
-
-      <View style={styles.filtroCard}>
-        <Text style={styles.label}>Selecione a Visão:</Text>
-        <View style={styles.pickerContainer}>
-          {carregandoDados ? (
-            <ActivityIndicator color="#34495E" style={{margin: 10}} />
-          ) : (
-            <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado}>
-              <Picker.Item label="Selecione um funcionário ou todos..." value="" />
-              <Picker.Item label="🌟 TODOS OS COLABORADORES (TOTAL GERAL)" value="TODOS" />
-              {listaColaboradores.map(c => <Picker.Item key={c.id} label={c.nome} value={c.nome} />)}
-            </Picker>
           )}
         </View>
 
         {colaboradorSelecionado !== '' && (
-          <View style={styles.blocoDatas}>
-            <Text style={styles.labelData}>Filtrar por Período (Opcional):</Text>
-            
-            <View style={[styles.row, { alignItems: 'center' }]}>
-              <View style={styles.colData}>
-                <TextInput 
-                  style={styles.inputData} 
-                  placeholder="De: DD/MM/AAAA" 
-                  placeholderTextColor="#95A5A6"
-                  keyboardType="numeric"
-                  value={dataInicio}
-                  onChangeText={(t) => setDataInicio(formatarDataInput(t))}
-                  maxLength={10}
-                />
-              </View>
-              
-              <Text style={styles.barraFiltro}>/</Text>
-              
-              <View style={styles.colData}>
-                <TextInput 
-                  style={styles.inputData} 
-                  placeholder="Até: DD/MM/AAAA" 
-                  placeholderTextColor="#95A5A6"
-                  keyboardType="numeric"
-                  value={dataFim}
-                  onChangeText={(t) => setDataFim(formatarDataInput(t))}
-                  maxLength={10}
-                />
-              </View>
-            </View>
-
-            <TouchableOpacity style={styles.btnFiltrar} onPress={acionarFiltroManual}>
-              <Text style={styles.btnFiltrarTexto}>🔍 APLICAR FILTRO E SOMAR</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {colaboradorSelecionado !== '' && (
-        <>
-          <View style={styles.resumoCard}>
-            <Text style={styles.resumoAvisoGlobal}>
-              {colaboradorSelecionado === 'TODOS' ? 'VALOR TOTAL DA FAZENDA' : `RESUMO: ${colaboradorSelecionado.toUpperCase()}`}
-            </Text>
-            <View style={styles.resumoRow}>
-              <View style={styles.resumoBox}>
-                <Text style={styles.resumoTitulo}>Total Produzido</Text>
-                <Text style={styles.resumoValorAzul}>{totalPes.toLocaleString('pt-BR')} pés</Text>
-              </View>
-              <View style={styles.resumoBox}>
-                <Text style={styles.resumoTitulo}>Valor de Pagamento</Text>
-                <Text style={styles.resumoValorVerde}>R$ {totalGanho.toFixed(2).replace('.', ',')}</Text>
-              </View>
-            </View>
-            {(dataInicio || dataFim) && (
-              <Text style={styles.avisoFiltroAtivo}>
-                Mostrando resultados {dataInicio ? `de ${dataInicio}` : ''} {dataFim ? `até ${dataFim}` : ''}
+          <>
+            <View style={styles.resumoCard}>
+              <Text style={styles.resumoAvisoGlobal}>
+                {colaboradorSelecionado === 'TODOS' ? 'VALOR TOTAL DA FAZENDA' : `RESUMO: ${colaboradorSelecionado.toUpperCase()}`}
               </Text>
+              <View style={styles.resumoRow}>
+                <View style={styles.resumoBox}>
+                  <Text style={styles.resumoTitulo}>Total Produzido</Text>
+                  {/* Total usa as variáveis que somam TODO o período filtrado */}
+                  <Text style={styles.resumoValorAzul}>{totalPes.toLocaleString('pt-BR')} un</Text>
+                </View>
+                <View style={styles.resumoBox}>
+                  <Text style={styles.resumoTitulo}>Valor de Pagamento</Text>
+                  <Text style={styles.resumoValorVerde}>R$ {totalGanho.toFixed(2).replace('.', ',')}</Text>
+                </View>
+              </View>
+              {(dataInicio || dataFim) && (
+                <Text style={styles.avisoFiltroAtivo}>
+                  Mostrando resultados {dataInicio ? `de ${dataInicio}` : ''} {dataFim ? `até ${dataFim}` : ''}
+                </Text>
+              )}
+            </View>
+
+            <Text style={styles.listaTitulo}>Histórico de Lançamentos ({extrato.length})</Text>
+
+            {buscandoExtrato ? (
+              <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 20}} />
+            ) : extratoPaginado.length === 0 ? (
+              <Text style={styles.vazioTexto}>Nenhum registro encontrado neste período.</Text>
+            ) : (
+              <>
+                {extratoPaginado.map((item) => {
+                  const isFalta = item.servico === 'Falta';
+                  const isAtestado = item.servico === 'Atestado';
+                  const dataExibicao = item.data ? new Date(item.data) : new Date(item.created_at);
+
+                  return (
+                    <View key={item.id} style={[styles.lancamentoCard, isFalta ? styles.cardFalta : isAtestado ? styles.cardAtestado : null]}>
+                      
+                      <View style={styles.lancamentoTopo}>
+                        <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0,5)}</Text>
+                        <Text style={[styles.lancamentoServico, isFalta ? {color: '#C0392B'} : isAtestado ? {color: '#2980B9'} : null]}>
+                          {item.servico}
+                        </Text>
+                      </View>
+
+                      {colaboradorSelecionado === 'TODOS' && (
+                        <Text style={styles.detalheTexto}>👤 Funcionário: {item.colaborador}</Text>
+                      )}
+
+                      {!isFalta && !isAtestado && (
+                        <View style={styles.lancamentoDetalhes}>
+                          <Text style={styles.detalheTexto}>📍 Fazenda: {item.fazenda} | Qd: {item.quadra} | Rm: {item.ramal}</Text>
+                          <View style={styles.linhaValores}>
+                            <Text style={styles.detalheQtd}>Qtd: {item.quantidade} pés</Text>
+                            <Text style={styles.detalheValor}>+ R$ {item.valor_total.toFixed(2).replace('.', ',')}</Text>
+                          </View>
+                        </View>
+                      )}
+
+                      {isAtestado && (
+                        <View style={styles.lancamentoDetalhes}>
+                          <Text style={styles.detalheTexto}>🏥 Data: {item.data_atestado || '-'} | Duração: {item.dias_atestado} dias</Text>
+                          <Text style={styles.detalheTexto}>🩺 CID: {item.cid_atestado || '-'}</Text>
+                        </View>
+                      )}
+
+                      <View style={styles.acoesRow}>
+                        <TouchableOpacity style={styles.btnEditar} onPress={() => abrirEdicao(item)}>
+                          <Text style={styles.btnEditarTexto}>✏️ Editar</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={styles.btnExcluir} onPress={() => confirmarExclusao(item.id, item.servico, item.data || item.created_at)}>
+                          <Text style={styles.btnExcluirTexto}>🗑️ Excluir</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                    </View>
+                  );
+                })}
+
+                {/* 🟢 BOTÃO DE CARREGAR MAIS SE HOUVEREM MAIS RESULTADOS ESCONDIDOS */}
+                {extrato.length > extratoPaginado.length && (
+                  <TouchableOpacity style={styles.btnCarregarMais} onPress={() => setPaginaAtual(p => p + 1)}>
+                    <Text style={styles.btnCarregarMaisTexto}>🔽 Carregar Mais (+50)</Text>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
-          </View>
+          </>
+        )}
 
-          <Text style={styles.listaTitulo}>Histórico de Lançamentos</Text>
-
-          {buscandoExtrato && (
-            <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 20}} />
-          )}
-          {!buscandoExtrato && extrato.length === 0 && (
-            <Text style={styles.vazioTexto}>Nenhum registro encontrado neste período.</Text>
-          )}
-        </>
-      )}
-    </>
-  );
-
-  return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      
-      {/* 🟢 O SEGREDO DO SUCESSO: FLATLIST VIRTUALIZADA */}
-      <FlatList
-        contentContainerStyle={styles.contentContainer}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        data={colaboradorSelecionado !== '' && !buscandoExtrato ? extrato : []}
-        keyExtractor={(item) => item.id.toString()}
-        ListHeaderComponent={headerElement}
-        renderItem={renderLancamento}
-        initialNumToRender={10}
-        maxToRenderPerBatch={10}
-        windowSize={5}
-        removeClippedSubviews={true}
-      />
-
-      {/* MODAL DE EDIÇÃO 100% BLINDADO */}
-      <Modal visible={modalEdicaoVisivel} transparent={true} animationType="slide">
-        <View style={styles.modalContainer}>
-          <View style={styles.modalCardGrande}>
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.modalTitle}>Editar Lançamento</Text>
-              
-              <View style={styles.rowModal}>
-                <View style={styles.colModal}>
-                  <Text style={styles.modalLabel}>Data:</Text>
-                  <TextInput style={styles.modalInput} keyboardType="numeric" value={editData} onChangeText={(t) => setEditData(formatarDataInput(t))} maxLength={10} />
-                </View>
-                <View style={styles.colModal}>
-                  <Text style={styles.modalLabel}>Hora:</Text>
-                  <TextInput style={styles.modalInput} keyboardType="numeric" value={editHora} onChangeText={(t) => setEditHora(formatarHoraInput(t))} maxLength={5} />
-                </View>
-              </View>
-
-              <Text style={styles.modalLabel}>Serviço:</Text>
-              <View style={styles.pickerModalContainer}>
-                <Picker selectedValue={editServico} onValueChange={setEditServico}>
-                  <Picker.Item label="Falta" value="Falta" />
-                  <Picker.Item label="Atestado" value="Atestado" />
-                  {listaServicos.map(s => <Picker.Item key={s.id} label={s.nome} value={s.nome} />)}
-                </Picker>
-              </View>
-
-              {editServico === 'Atestado' && (
-                <>
-                  <Text style={styles.modalLabel}>Dias de Duração:</Text>
-                  <TextInput style={styles.modalInput} keyboardType="numeric" value={editDiasAtestado} onChangeText={setEditDiasAtestado} />
-                </>
-              )}
-
-              {editServico !== 'Falta' && editServico !== 'Atestado' && (
-                <>
-                  <View style={styles.rowModal}>
-                    <View style={styles.colModal}>
-                      <Text style={styles.modalLabel}>Fazenda:</Text>
-                      <View style={styles.pickerModalContainer}>
-                        <Picker selectedValue={editFazenda} onValueChange={setEditFazenda}>
-                          <Picker.Item label="..." value="" />
-                          {fazendasDisponiveis.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
-                        </Picker>
-                      </View>
-                    </View>
-                    <View style={styles.colModal}>
-                      <Text style={styles.modalLabel}>Quadra:</Text>
-                      <View style={styles.pickerModalContainer}>
-                        <Picker selectedValue={editQuadra} onValueChange={setEditQuadra}>
-                          <Picker.Item label="..." value="" />
-                          {quadrasDisponiveis.map((q, i) => <Picker.Item key={i} label={q} value={q} />)}
-                        </Picker>
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={styles.rowModal}>
-                    <View style={styles.colModal}>
-                      <Text style={styles.modalLabel}>Ramal:</Text>
-                      <TextInput style={styles.modalInput} keyboardType="numeric" value={editRamal} onChangeText={setEditRamal} />
-                    </View>
-                    <View style={styles.colModal}>
-                      <Text style={styles.modalLabel}>Quantidade:</Text>
-                      <TextInput style={styles.modalInput} keyboardType="numeric" value={editQuantidade} onChangeText={setEditQuantidade} />
-                    </View>
-                  </View>
-                  <Text style={styles.modalAviso}>O total R$ será recalculado com o preço atual do serviço.</Text>
-                </>
-              )}
-
-              <View style={styles.modalAcoes}>
-                <TouchableOpacity style={styles.modalBtnCancelar} onPress={() => setModalEdicaoVisivel(false)}>
-                  <Text style={styles.modalBtnTextoCancelar}>Cancelar</Text>
-                </TouchableOpacity>
+        {/* MODAL DE EDIÇÃO 100% */}
+        <Modal visible={modalEdicaoVisivel} transparent={true} animationType="slide">
+          <View style={styles.modalContainer}>
+            <View style={styles.modalCardGrande}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                <Text style={styles.modalTitle}>Editar Lançamento</Text>
                 
-                <TouchableOpacity style={styles.modalBtnSalvar} onPress={salvarEdicao} disabled={salvandoEdicao}>
-                  {salvandoEdicao ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalBtnTextoSalvar}>Salvar Alterações</Text>}
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+                <View style={styles.row}>
+                  <View style={styles.colData}>
+                    <Text style={styles.modalLabel}>Data:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editData} onChangeText={(t) => setEditData(formatarDataInput(t))} maxLength={10} />
+                  </View>
+                  <View style={styles.colData}>
+                    <Text style={styles.modalLabel}>Hora:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editHora} onChangeText={(t) => setEditHora(formatarHoraInput(t))} maxLength={5} />
+                  </View>
+                </View>
 
+                <Text style={styles.modalLabel}>Serviço:</Text>
+                <View style={styles.pickerModalContainer}>
+                  <Picker selectedValue={editServico} onValueChange={setEditServico}>
+                    <Picker.Item label="Falta" value="Falta" />
+                    <Picker.Item label="Atestado" value="Atestado" />
+                    {listaServicos.map(s => <Picker.Item key={s.id} label={s.nome} value={s.nome} />)}
+                  </Picker>
+                </View>
+
+                {editServico === 'Atestado' && (
+                  <>
+                    <Text style={styles.modalLabel}>Dias de Duração:</Text>
+                    <TextInput style={styles.modalInput} keyboardType="numeric" value={editDiasAtestado} onChangeText={setEditDiasAtestado} />
+                  </>
+                )}
+
+                {editServico !== 'Falta' && editServico !== 'Atestado' && (
+                  <>
+                    <View style={styles.row}>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Fazenda:</Text>
+                        <View style={styles.pickerModalContainer}>
+                          <Picker selectedValue={editFazenda} onValueChange={setEditFazenda}>
+                            <Picker.Item label="..." value="" />
+                            {fazendasDisponiveis.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
+                          </Picker>
+                        </View>
+                      </View>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Quadra:</Text>
+                        <View style={styles.pickerModalContainer}>
+                          <Picker selectedValue={editQuadra} onValueChange={setEditQuadra}>
+                            <Picker.Item label="..." value="" />
+                            {quadrasDisponiveis.map((q, i) => <Picker.Item key={i} label={q} value={q} />)}
+                          </Picker>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.row}>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Ramal:</Text>
+                        <TextInput style={styles.modalInput} keyboardType="numeric" value={editRamal} onChangeText={setEditRamal} />
+                      </View>
+                      <View style={styles.colData}>
+                        <Text style={styles.modalLabel}>Quantidade:</Text>
+                        {/* 🟢 TECLADO DECIMAL PARA PERMITIR PONTO OU VÍRGULA */}
+                        <TextInput style={styles.modalInput} keyboardType="decimal-pad" value={editQuantidade} onChangeText={setEditQuantidade} />
+                      </View>
+                    </View>
+                    <Text style={styles.modalAviso}>O total R$ será recalculado com o preço atual do serviço.</Text>
+                  </>
+                )}
+
+                <View style={styles.modalAcoes}>
+                  <TouchableOpacity style={styles.modalBtnCancelar} onPress={() => setModalEdicaoVisivel(false)}>
+                    <Text style={styles.modalBtnTextoCancelar}>Cancelar</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity style={styles.modalBtnSalvar} onPress={salvarEdicao} disabled={salvandoEdicao}>
+                    {salvandoEdicao ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalBtnTextoSalvar}>Salvar Alterações</Text>}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        <View style={{height: 80}} />
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F0F4F7' },
-  contentContainer: { padding: 20, paddingBottom: 100 },
-  
+  container: { flex: 1, backgroundColor: '#F0F4F7', padding: 20 },
   header: { marginTop: 30, marginBottom: 20, alignItems: 'center' },
   title: { fontSize: 26, fontWeight: 'bold', color: '#2C3E50' },
   subtitle: { fontSize: 14, color: '#7F8C8D' },
@@ -547,8 +560,7 @@ const styles = StyleSheet.create({
   blocoDatas: { marginTop: 15, borderTopWidth: 1, borderTopColor: '#465C70', paddingTop: 15 },
   labelData: { color: '#BDC3C7', fontSize: 12, fontWeight: 'bold', marginBottom: 10 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
-  colData: { flex: 1 },
-  barraFiltro: { fontSize: 24, color: '#95A5A6', fontWeight: 'bold', marginHorizontal: 10 },
+  colData: { width: '48%' },
   inputData: { backgroundColor: '#FFF', borderRadius: 6, padding: 10, fontSize: 14, color: '#2C3E50', textAlign: 'center', fontWeight: 'bold' },
   btnFiltrar: { backgroundColor: '#27AE60', padding: 12, borderRadius: 6, marginTop: 15, alignItems: 'center' },
   btnFiltrarTexto: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
@@ -585,13 +597,13 @@ const styles = StyleSheet.create({
   btnExcluir: { backgroundColor: '#FADBD8', padding: 8, borderRadius: 5, alignItems: 'center', width: '48%' },
   btnExcluirTexto: { color: '#C0392B', fontSize: 12, fontWeight: 'bold' },
 
+  btnCarregarMais: { backgroundColor: '#D5DBDB', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  btnCarregarMaisTexto: { color: '#2C3E50', fontWeight: 'bold', fontSize: 14 },
+
+  // ESTILOS DO MODAL
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
   modalCardGrande: { backgroundColor: '#FFF', padding: 20, borderRadius: 15, elevation: 10, maxHeight: '90%' },
   modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#2C3E50', marginBottom: 15, textAlign: 'center' },
-  
-  rowModal: { flexDirection: 'row', justifyContent: 'space-between' },
-  colModal: { flex: 1, marginHorizontal: 5 },
-  
   modalLabel: { fontSize: 13, fontWeight: 'bold', color: '#34495E', marginBottom: 5, marginTop: 10 },
   modalInput: { borderWidth: 1, borderColor: '#D5DBDB', borderRadius: 8, padding: 10, fontSize: 16, backgroundColor: '#F8FAFC', textAlign: 'center', height: 45 },
   pickerModalContainer: { borderWidth: 1, borderColor: '#D5DBDB', borderRadius: 8, backgroundColor: '#F8FAFC', overflow: 'hidden', height: 45, justifyContent: 'center' },
