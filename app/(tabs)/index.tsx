@@ -156,7 +156,7 @@ export default function HomeScreen() {
     try {
       let { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
       const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
-      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes, data_bloqueio');
+      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
       const { data: config, error: errConfig } = await supabase.from('configuracoes').select('*').single();
 
       if (errColab || errServ || errMapa) throw new Error("Sem rede");
@@ -226,8 +226,18 @@ export default function HomeScreen() {
     }
     if (quadra) {
       const ramaisDessaQuadra = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra);
-      ramaisDessaQuadra.sort((a, b) => parseInt(a.ramal) - parseInt(b.ramal));
-      setRamaisDisponiveis(ramaisDessaQuadra);
+      
+      const ramaisUnicosMap = new Map();
+      ramaisDessaQuadra.forEach(r => {
+         const rStr = String(r.ramal);
+         if (!ramaisUnicosMap.has(rStr)) {
+             ramaisUnicosMap.set(rStr, r);
+         }
+      });
+      
+      const ramaisUnicos = Array.from(ramaisUnicosMap.values());
+      ramaisUnicos.sort((a: any, b: any) => parseInt(a.ramal) - parseInt(b.ramal));
+      setRamaisDisponiveis(ramaisUnicos);
     } else {
       setRamaisDisponiveis([]);
     }
@@ -246,9 +256,49 @@ export default function HomeScreen() {
   const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
-  const somaPesSelecionados = ramaisDisponiveis
-    .filter(r => ramaisSelecionados.includes(String(r.ramal)))
-    .reduce((acc, curr) => acc + (converterParaNumero(curr.total_pes) || 0), 0);
+  // 🟢 CÁLCULO INTELIGENTE DO TOTAL DE PÉS POR SERVIÇO (AGORA LÊ A COLUNA "servico_permitido")
+  let somaPesSelecionados = 0;
+  ramaisSelecionados.forEach(ramalStr => {
+     const cadastrosDoRamal = mapaCompleto.filter(m => 
+         m.fazenda === fazenda && 
+         m.quadra === quadra && 
+         String(m.ramal) === ramalStr
+     );
+
+     if (cadastrosDoRamal.length > 0) {
+         const servicoFormatado = String(servico).trim().toUpperCase();
+
+         // 1º Tenta achar a linha com o nome do serviço EXATO (ex: 'ESTRIAS NORMAL')
+         const cadastroExato = cadastrosDoRamal.find(m => 
+             m.servico_permitido && 
+             String(m.servico_permitido).trim().toUpperCase() === servicoFormatado
+         );
+         
+         if (cadastroExato) {
+             somaPesSelecionados += converterParaNumero(cadastroExato.total_pes);
+         } else {
+             // 2º Tenta achar se contém parte do nome (ex: O usuário escolheu 'ESTRIAS' e no banco tem 'ESTRIA NORMAL')
+             const cadastroAproximado = cadastrosDoRamal.find(m => 
+                 m.servico_permitido && 
+                 (String(m.servico_permitido).toUpperCase().includes(servicoFormatado) || 
+                  servicoFormatado.includes(String(m.servico_permitido).toUpperCase()))
+             );
+             
+             if (cadastroAproximado) {
+                 somaPesSelecionados += converterParaNumero(cadastroAproximado.total_pes);
+             } else {
+                 // 3º Se não achou de jeito nenhum, vê se tem alguma linha vazia/genérica para usar
+                 const cadastroGenerico = cadastrosDoRamal.find(m => !m.servico_permitido || String(m.servico_permitido).trim() === '');
+                 if (cadastroGenerico) {
+                     somaPesSelecionados += converterParaNumero(cadastroGenerico.total_pes);
+                 } else {
+                     // 4º Último caso: pega o total da primeira linha que aparecer
+                     somaPesSelecionados += converterParaNumero(cadastrosDoRamal[0].total_pes);
+                 }
+             }
+         }
+     }
+  });
   
   const limitePesCalculado = somaPesSelecionados > 0 ? somaPesSelecionados : null;
 
@@ -275,7 +325,6 @@ export default function HomeScreen() {
     const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || 'Não Identificado';
 
     if (!isCarregamentoResina && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
-      // 🟢 ESCUDO OFFLINE ADICIONADO AQUI (.catch() garante que a rede não crashe o App)
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{
           colaborador: colaborador || 'Não Selecionado',
@@ -365,7 +414,6 @@ export default function HomeScreen() {
         }
       }
 
-      // 🟢 O salvamento também tem o escudo offline .catch()
       if (limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
           setQuantidade('');
           return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");

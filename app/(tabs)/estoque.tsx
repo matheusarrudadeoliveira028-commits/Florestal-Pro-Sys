@@ -66,7 +66,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
       </View>
 
       <View style={styles.botoesHistoricoContainer}>
-        {/* 🟢 BOTÃO: HISTÓRICO DE ENTRADAS */}
         {item.historicoEntradas && item.historicoEntradas.length > 0 && (
           <View style={{ marginBottom: 10 }}>
             <TouchableOpacity 
@@ -78,7 +77,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
                 {expandidoEntradas ? "Ocultar Coletas" : "Ver Histórico de Coletas"}
               </Text>
             </TouchableOpacity>
-
             {expandidoEntradas && (
               <View style={[styles.containerHistorico, { borderColor: '#A9DFBF' }]}>
                 <Text style={styles.tituloHistorico}>📥 Detalhamento de Coletas (Mato)</Text>
@@ -108,7 +106,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
           </View>
         )}
 
-        {/* 🟢 BOTÃO: HISTÓRICO DE REMOÇÕES */}
         {item.historicoRemocoes && item.historicoRemocoes.length > 0 && (
           <View style={{ marginBottom: 10 }}>
             <TouchableOpacity 
@@ -120,7 +117,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
                 {expandidoRemocoes ? "Ocultar Remoções" : "Ver Histórico de Remoções (Pátio)"}
               </Text>
             </TouchableOpacity>
-
             {expandidoRemocoes && (
               <View style={[styles.containerHistorico, { borderColor: '#AED6F1' }]}>
                 <Text style={styles.tituloHistorico}>🚜 Detalhamento de Remoções</Text>
@@ -150,7 +146,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
           </View>
         )}
 
-        {/* 🟢 BOTÃO: HISTÓRICO DE SAÍDAS */}
         {item.historicoSaidas && item.historicoSaidas.length > 0 && (
           <View>
             <TouchableOpacity 
@@ -162,7 +157,6 @@ const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
                 {expandidoSaidas ? "Ocultar Expedições" : "Ver Histórico de Expedições (Carga)"}
               </Text>
             </TouchableOpacity>
-
             {expandidoSaidas && (
               <View style={[styles.containerHistorico, { borderColor: '#F5CBA7' }]}>
                 <Text style={styles.tituloHistorico}>🚚 Detalhamento de Expedições</Text>
@@ -206,11 +200,9 @@ export default function EstoqueDashboard() {
   const [totalGlobal, setTotalGlobal] = useState(0);
   const [totalPatioGlobal, setTotalPatioGlobal] = useState(0);
 
-  // Estados para o Filtro de Data
   const [dataInicial, setDataInicial] = useState('');
   const [dataFinal, setDataFinal] = useState('');
 
-  // Estados para Modais
   const [modalAnteriorVisivel, setModalAnteriorVisivel] = useState(false);
   const [listaFazendas, setListaFazendas] = useState<string[]>([]);
   const [fazendaAnterior, setFazendaAnterior] = useState('');
@@ -250,6 +242,18 @@ export default function EstoqueDashboard() {
     return limpa.substring(0, 10);
   };
 
+  // 🟢 FUNÇÃO INTELIGENTE PARA GARANTIR A LEITURA DA TROPICAL E HÍBRIDO EM QUALQUER CAMPO
+  const padronizarResina = (resStr: any, servicoStr: any = '') => {
+    let r = String(resStr || '').toUpperCase();
+    let s = String(servicoStr || '').toUpperCase();
+    
+    if (r.includes('TROPICAL') || s.includes('TROPICAL')) return 'TROPICAL';
+    if (r.includes('HÍBRIDO') || r.includes('HIBRIDO') || s.includes('HÍBRIDO')) return 'HÍBRIDO';
+    if (r.includes('ELLIOTTI') || r.includes('ELIOTI') || s.includes('ELLIOTTI')) return 'ELLIOTTI';
+    
+    return '-';
+  };
+
   const carregarEstoque = async () => {
     try {
       setLoading(prev => refreshing ? prev : true);
@@ -274,8 +278,8 @@ export default function EstoqueDashboard() {
           mapaEstoque[key] = { 
             fazenda: fz, resina: res, 
             entradas: 0, anterior: 0, 
-            removidos: 0, removidosAnterior: 0, 
-            saidas: 0, saidasAnterior: 0, baixas: 0, 
+            removidos: 0, patioAnterior: 0, // 🟢 NOVO CAMPO PARA O MATEMÁTICO DO PÁTIO
+            saidas: 0, baixas: 0, 
             saldo: 0, saldoPatio: 0,
             historicoEntradas: [], historicoRemocoes: [], historicoSaidas: [] 
           };
@@ -288,13 +292,18 @@ export default function EstoqueDashboard() {
       const dtIniObj = new Date(`${dataIniBD}T00:00:00Z`);
       const dtFimObj = new Date(`${dataFimBD}T23:59:59Z`);
 
+      // 1. Processar Saldo Inicial (Considerado como já estando no pátio!)
       (anteriores || []).forEach((item) => {
         const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
-        const res = item.tipo_resina || 'INDEFINIDA';
-        const key = inicializarChave(fz, res);
-        mapaEstoque[key].anterior += Number(item.quantidade) || 0;
+        const res = padronizarResina(item.tipo_resina);
+        const key = inicializarChave(fz, res === '-' ? 'ELLIOTTI' : res);
+        const qtd = Number(item.quantidade) || 0;
+        
+        mapaEstoque[key].anterior += qtd;
+        mapaEstoque[key].patioAnterior += qtd; 
       });
 
+      // 2. Processar Coletas e Remoções
       (entradas || []).forEach((item) => {
         const nomeServico = item.servico ? String(item.servico).toLowerCase() : '';
         const isColeta = nomeServico.includes('coleta');
@@ -303,71 +312,73 @@ export default function EstoqueDashboard() {
         if (isColeta || isRemocao) {
           const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
           
-          let res = item.tipo_resina || '-';
-          if (res === '-' || res === 'INDEFINIDA') {
+          let res = padronizarResina(item.tipo_resina, item.servico);
+          if (res === '-') {
+             // Se não encontrou a resina, herda a resina que a fazenda já tem
              const existingKey = Object.keys(mapaEstoque).find(k => k.startsWith(`${fz}|`) && !k.endsWith('|-'));
              res = existingKey ? existingKey.split('|')[1] : 'ELLIOTTI';
           }
-          res = res.toUpperCase();
 
           const key = inicializarChave(fz, res);
           const qtd = Number(item.quantidade) || 0;
-
-          const dataItemStr = normalizarData(item.data || item.created_at);
-          const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
+          const dataItemObj = new Date(`${normalizarData(item.data || item.created_at)}T12:00:00Z`);
 
           if (dataItemObj < dtIniObj) {
             if (isColeta) mapaEstoque[key].anterior += qtd;
-            if (isRemocao) mapaEstoque[key].removidosAnterior += qtd;
+            if (isRemocao) mapaEstoque[key].patioAnterior += qtd;
           } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
             if (isColeta) {
               mapaEstoque[key].entradas += qtd;
               mapaEstoque[key].historicoEntradas.push({
-                data: dataItemStr, colaborador: item.colaborador || 'Não Identificado', quantidade: qtd
+                data: normalizarData(item.data || item.created_at), colaborador: item.colaborador || 'Não Identificado', quantidade: qtd
               });
             }
             if (isRemocao) {
               mapaEstoque[key].removidos += qtd;
               mapaEstoque[key].historicoRemocoes.push({
-                data: dataItemStr, quadra: item.quadra || '-', quantidade: qtd
+                data: normalizarData(item.data || item.created_at), quadra: item.quadra || '-', quantidade: qtd
               });
             }
           }
         }
       });
 
+      // 3. Processar Saídas
       (saidas || []).forEach((item) => {
         if (item.tipo_carga && String(item.tipo_carga).toUpperCase() === 'MADEIRA') return;
 
         const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
-        let res = item.variedade ? String(item.variedade).trim().toUpperCase() : 'INDEFINIDA';
+        let res = padronizarResina(item.variedade);
+        
+        if (res === '-') {
+             const existingKey = Object.keys(mapaEstoque).find(k => k.startsWith(`${fz}|`) && !k.endsWith('|-'));
+             res = existingKey ? existingKey.split('|')[1] : 'ELLIOTTI';
+        }
+        
         const key = inicializarChave(fz, res);
         const qtd = Number(item.quantidade) || 0;
-        
-        const dataItemStr = normalizarData(item.data_saida || item.data || item.created_at);
-        const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
+        const dataItemObj = new Date(`${normalizarData(item.data_saida || item.data || item.created_at)}T12:00:00Z`);
 
         if (dataItemObj < dtIniObj) {
             mapaEstoque[key].anterior -= qtd;
-            mapaEstoque[key].saidasAnterior += qtd;
+            mapaEstoque[key].patioAnterior -= qtd;
         } else if (dataItemObj >= dtIniObj && dataItemObj <= dtFimObj) {
             mapaEstoque[key].saidas += qtd;
             mapaEstoque[key].historicoSaidas.push({
-              data: dataItemStr,
+              data: normalizarData(item.data_saida || item.data || item.created_at),
               romaneio: item.numero_romaneio || item.romaneio || item.nf || item.placa || item.id || 'N/A',
               quantidade: qtd
             });
         }
       });
 
+      // 4. Processar Baixas (Perdas do mato)
       (baixas || []).forEach((item) => {
         const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
-        const res = item.tipo_resina || 'INDEFINIDA';
-        const key = inicializarChave(fz, res);
+        const res = padronizarResina(item.tipo_resina);
+        const key = inicializarChave(fz, res === '-' ? 'ELLIOTTI' : res);
         const qtd = Number(item.quantidade) || 0;
-
-        const dataItemStr = normalizarData(item.created_at || item.data);
-        const dataItemObj = new Date(`${dataItemStr}T12:00:00Z`);
+        const dataItemObj = new Date(`${normalizarData(item.created_at || item.data)}T12:00:00Z`);
 
         if (dataItemObj < dtIniObj) {
             mapaEstoque[key].anterior -= qtd;
@@ -376,25 +387,17 @@ export default function EstoqueDashboard() {
         }
       });
 
-      let total = 0;
-      let patioTotal = 0;
-
+      // 5. Consolidar os cartões da tela
       const resultadoFinal = Object.values(mapaEstoque).map((item) => {
-        // Saldo Geral (O que tem lá dentro da floresta + pátio)
         const saldo = (item.entradas + item.anterior) - (item.saidas + item.baixas);
         
-        // 🟢 CORREÇÃO DA LÓGICA DO PÁTIO:
-        // O "Estoque Anterior" lançado manualmente conta como saldo disponível no pátio,
-        // para que a saída/carregamento não deixe o pátio negativo.
-        const totalHistoricoPatio = item.anterior + item.removidosAnterior - item.saidasAnterior;
-        let saldoPatio = totalHistoricoPatio + item.removidos - item.saidas;
+        // 🟢 MATEMÁTICA PERFEITA DO PÁTIO:
+        let saldoPatio = item.patioAnterior + item.removidos - item.saidas;
 
-        // Travas de segurança: o pátio não pode ser negativo nem maior que o saldo geral da fazenda
+        // Travas blindadas
         if (saldoPatio < 0) saldoPatio = 0;
-        if (saldoPatio > saldo) saldoPatio = saldo;
-
-        total += saldo;
-        patioTotal += saldoPatio;
+        if (saldo > 0 && saldoPatio > saldo) saldoPatio = saldo;
+        if (saldo <= 0) saldoPatio = 0; 
 
         item.historicoEntradas.sort((a: any, b: any) => new Date(b.data).getTime() - new Date(a.data).getTime());
         item.historicoRemocoes.sort((a: any, b: any) => new Date(b.data).getTime() - new Date(a.data).getTime());
@@ -403,7 +406,7 @@ export default function EstoqueDashboard() {
         return { ...item, saldo, saldoPatio };
       });
 
-      // Oculta os cartões zerados
+      // Remove as fazendas zeradas do visual
       const estoqueLimpo = resultadoFinal.filter(i => i.saldo !== 0 || i.entradas !== 0 || i.saidas !== 0 || i.baixas !== 0 || i.anterior !== 0 || i.removidos !== 0);
 
       estoqueLimpo.sort((a, b) => {
@@ -411,9 +414,18 @@ export default function EstoqueDashboard() {
         return a.fazenda.localeCompare(b.fazenda);
       });
 
+      // 🟢 O TOTAL GLOBAL AGORA LÊ EXATAMENTE O QUE FICOU NA TELA!
+      let sumGlobal = 0;
+      let sumPatio = 0;
+      estoqueLimpo.forEach(item => {
+          sumGlobal += item.saldo;
+          sumPatio += item.saldoPatio;
+      });
+
       setEstoque(estoqueLimpo);
-      setTotalGlobal(total);
-      setTotalPatioGlobal(patioTotal);
+      setTotalGlobal(sumGlobal);
+      setTotalPatioGlobal(sumPatio);
+
     } catch (error) {
       console.log('Erro ao calcular estoque:', error);
     } finally {
