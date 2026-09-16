@@ -273,6 +273,7 @@ export default function RelatoriosScreen() {
         console.warn("Aviso: Não foi possível carregar a logo para o PDF.", imgErr);
       }
 
+      // 1. Busca os lançamentos normais DO PERÍODO
       let query = supabase.from('diarios_campo').select('*')
         .gte('data', `${dtInicioBD} 00:00:00`)
         .lte('data', `${dtFimBD} 23:59:59`)
@@ -293,10 +294,42 @@ export default function RelatoriosScreen() {
       const { data: lancamentosData, error: errLanc } = await query;
       if (errLanc) throw errLanc;
 
-      const lancamentos = (lancamentosData || []).filter((item: any) => 
+      let lancamentos = (lancamentosData || []).filter((item: any) => 
         String(item.colaborador).toUpperCase() !== 'EQUIPE DE REMOÇÃO' &&
         String(item.servico).toUpperCase() !== 'REMOÇÃO'
       );
+
+      // 🟢 2. RESGATE DE AFASTAMENTOS LONGOS E ANTIGOS (NOVO)
+      try {
+        // Volta 180 dias no tempo a partir da data de início do relatório
+        const dtAntiga = new Date(anoInicial, parseInt(dtInicioBD.split('-')[1]) - 1, parseInt(dtInicioBD.split('-')[2]));
+        dtAntiga.setDate(dtAntiga.getDate() - 180);
+        const dataBuscaAntigaBD = formatarDataIso(dtAntiga);
+
+        let queryAusencias = supabase.from('diarios_campo').select('*')
+          .gte('data', `${dataBuscaAntigaBD} 00:00:00`)
+          .lt('data', `${dtInicioBD} 00:00:00`) // Pega só o que ficou pra trás
+          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%');
+
+        if (colaboradorSelecionado !== 'TODOS') {
+          queryAusencias = queryAusencias.eq('colaborador', colaboradorSelecionado);
+        } else if (fiscalSelecionado !== 'TODOS') {
+          const nomesEquipe = listaColaboradoresFiltrada.map(c => c.nome);
+          if (nomesEquipe.length > 0) {
+            queryAusencias = queryAusencias.in('colaborador', nomesEquipe);
+          } else {
+            queryAusencias = queryAusencias.eq('fiscal_nome', fiscalSelecionado);
+          }
+        }
+
+        const { data: ausenciasData } = await queryAusencias;
+        if (ausenciasData && ausenciasData.length > 0) {
+          // Injeta os atestados/afastamentos antigos na lista que será processada
+          lancamentos = [...lancamentos, ...ausenciasData];
+        }
+      } catch (errAusencia) {
+        console.warn('Aviso: Falha ao buscar ausências antigas:', errAusencia);
+      }
 
       if (lancamentos.length === 0 && colaboradorSelecionado === 'TODOS' && fiscalSelecionado === 'TODOS') {
         setGerando(false);
@@ -410,13 +443,17 @@ export default function RelatoriosScreen() {
           const diaMesStr = isoDate.split('-')[2];
           const diaMesNum = parseInt(diaMesStr, 10);
 
+          const isFeriadoManual = arrayFeriadosManuais.includes(diaMesStr);
+          const isFeriadoNacional = listaFeriadosNacionais.includes(isoDate);
+          const isFeriado = isFeriadoNacional || isFeriadoManual;
+
           // Filtra para remover da tabela normal qualquer coisa que seja Ausência/Licença
           const registrosDoDia = folha.registros.filter((r: any) => {
             const dataLancamento = padronizarDataDoBanco(r.data);
             return dataLancamento === isoDate && !verificarSeAusencia(r.servico);
           });
 
-          // Varre os registros para ver se esse dia cai dentro do período de alguma Ausência
+          // Varre os registros para ver se esse dia cai dentro do período de alguma Ausência (Até mesmo aquelas injetadas lá de trás)
           const ausenciaVigente = folha.registros.find((r: any) => {
             if (!verificarSeAusencia(r.servico)) return false;
 
@@ -459,29 +496,38 @@ export default function RelatoriosScreen() {
               const ramaisUnicos = [...new Set(item.ramais)];
               const ramaisStr = ramaisUnicos.join(', ') || '-'; 
               
-              const valorUni = item.valor_unitario ? item.valor_unitario.toFixed(4).replace('.', ',') : '0,00';
-              const valorTot = item.valor_total ? item.valor_total.toFixed(2).replace('.', ',') : '0,00';
+              let nomeServico = item.servico || '-';
+              let valorUniNum = item.valor_unitario || 0;
+              let valorTotNum = item.valor_total || 0;
+
+              // Se for feriado e ele trabalhou, ajusta o nome e dobra os valores
+              if (isFeriado) {
+                nomeServico = `${nomeServico} / FERIADO`;
+                valorUniNum = valorUniNum * 2;
+                valorTotNum = valorTotNum * 2;
+              }
+
+              const valorUni = valorUniNum.toFixed(4).replace('.', ',');
+              const valorTot = valorTotNum.toFixed(2).replace('.', ',');
               
-              totalGeral += (item.valor_total || 0);
+              totalGeral += valorTotNum;
+
+              const bgColor = isFeriado ? 'background-color: #FEF9E7;' : '';
 
               linhasTabela += `
-                <tr>
+                <tr style="${bgColor}">
                   <td>${diaMesStr}</td>
-                  <td>${item.servico || '-'}</td>
+                  <td>${nomeServico}</td>
                   <td>${item.fazenda || '-'}</td>
                   <td>${item.quadra || '-'}</td>
                   <td>${ramaisStr}</td>
                   <td>${item.quantidade || '-'}</td>
                   <td>${valorUni}</td>
-                  <td>R$ ${valorTot}</td>
+                  <td><strong>R$ ${valorTot}</strong></td>
                 </tr>
               `;
             });
           } else {
-            const isFeriadoManual = arrayFeriadosManuais.includes(diaMesStr);
-            const isFeriadoNacional = listaFeriadosNacionais.includes(isoDate);
-            const isFeriado = isFeriadoNacional || isFeriadoManual;
-
             const isFerias = feriasDB?.some((f: any) => 
               f.colaborador_nome === folha.nome && 
               isoDate >= f.data_inicio && 
@@ -500,14 +546,11 @@ export default function RelatoriosScreen() {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #FEF9E7; color: #F39C12; font-weight: bold; letter-spacing: 2px;">FÉRIAS</td></tr>`;
             } else if (ausenciaVigente) { 
               
-              // O valor padrão agora vem DIRETAMENTE do banco de dados para todas as ausências!
               let valorDiaAusencia = parseFloat(ausenciaVigente.valor_unitario) || 0;
               
               const isAtestado = ausenciaVigente.servico.toUpperCase().includes('ATESTADO');
               const isSistemaNovo = ausenciaVigente.observacao === 'SISTEMA_NOVO';
 
-              // 🟢 REGRA DE LEGADO ABSOLUTA: 
-              // Apenas Atestados antigos (que NÃO tem a marcação SISTEMA_NOVO) vão receber o valor forçado da tela.
               if (isAtestado && !isSistemaNovo) {
                 if (diaMesNum <= 15) {
                   valorDiaAusencia = parseFloat(valorAtestado.replace(',', '.')) || 0;
