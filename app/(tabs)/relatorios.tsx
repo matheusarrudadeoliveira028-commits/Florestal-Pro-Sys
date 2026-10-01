@@ -338,6 +338,10 @@ export default function RelatoriosScreen() {
 
       const { data: feriasDB } = await supabase.from('ferias').select('*');
 
+      // 🟢 Busca dados atualizados da tabela `colaboradores` para garantir leitura imediata de `data_demissao` e `data_admissao`
+      const { data: colaboradoresDB } = await supabase.from('colaboradores').select('*');
+      const baseColaboradores = colaboradoresDB && colaboradoresDB.length > 0 ? colaboradoresDB : listaColaboradores;
+
       const estaDeFerias = (nome: string, dataLancamento: string) => {
         const dataFormatada = padronizarDataDoBanco(dataLancamento);
         return feriasDB?.some(f => 
@@ -420,13 +424,18 @@ export default function RelatoriosScreen() {
         const fazendasTrabalhadas = [...new Set(folha.registros.map((r: any) => r.fazenda).filter(Boolean))].join(' / ') || 'Não Informada';
 
         const nomeLimpoFolha = limparNome(folha.nome);
-        const dadosDoColaborador = listaColaboradores.find(c => limparNome(c.nome) === nomeLimpoFolha);
+        const dadosDoColaborador = baseColaboradores.find((c: any) => limparNome(c.nome) === nomeLimpoFolha);
         
         let dataAdmissaoIsoStr: string | null = null;
+        let dataDemissaoIsoStr: string | null = null;
 
         if (dadosDoColaborador) {
           const adm = dadosDoColaborador.data_admissao || dadosDoColaborador.created_at;
           dataAdmissaoIsoStr = extrairAdmissaoISO(adm);
+
+          // 🟢 Lê a coluna `data_demissao` da tabela `colaboradores` (com fallback para `demissao`)
+          const dem = dadosDoColaborador.data_demissao || dadosDoColaborador.demissao;
+          dataDemissaoIsoStr = extrairAdmissaoISO(dem);
         }
 
         let linhasTabela = '';
@@ -535,10 +544,10 @@ export default function RelatoriosScreen() {
             );
             
             const isAntesAdmissao = dataAdmissaoIsoStr !== null && (isoDate < dataAdmissaoIsoStr);
-            
+            const isDemitido = dataDemissaoIsoStr !== null && (isoDate >= dataDemissaoIsoStr);
             const isFuturo = isoDate > dataHojeIso;
             
-            if (isAntesAdmissao || isFuturo) {
+            if (isAntesAdmissao || isDemitido || isFuturo) {
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #F4F6F6;"></td></tr>`;
             } else if (diaDaSemana === 0) { 
               linhasTabela += `<tr><td><strong>${diaMesStr}</strong></td><td colspan="7" style="background-color: #EAEDED; color: #7F8C8D; font-weight: bold; letter-spacing: 2px;">DOMINGO</td></tr>`;
@@ -628,7 +637,7 @@ export default function RelatoriosScreen() {
               </tr>
               <tr>
                 <td style="text-align: center; padding: 15px; font-size: 13px; line-height: 1.6;">
-                  Declaro ter recebido da empresa LUIZ FELIPE AREOVALDO CALHIM MANOEL ABUD, CNPJ nº 08.396.358/0007-82, a importância total de 
+                  Declaro ter recebido da empresa LUIZ FELIPE AREOVALDO CALHIM MANOEL ABUD, CEI: 800049398442, a importância total de 
                   <strong style="font-size: 15px;">R$ ${totalGeral.toFixed(2).replace('.', ',')}</strong> 
                   referente a produção conforme respectivas datas e valores discriminados:
                 </td>

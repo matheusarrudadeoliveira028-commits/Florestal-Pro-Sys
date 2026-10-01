@@ -534,7 +534,7 @@ export default function CarregamentosScreen() {
             .ticket { border: 2px solid #000; padding: 20px; width: 100%; max-width: 600px; margin: 0 auto; }
             .header-box { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 15px; }
             .header-title { font-size: 18px; font-weight: bold; margin: 0; text-transform: uppercase; }
-            .header-cnpj { font-size: 14px; margin: 5px 0 0 0; }
+            .header-CEI { font-size: 14px; margin: 5px 0 0 0; }
             .romaneio-title { text-align: center; font-size: 20px; font-weight: bold; margin: 15px 0; }
             .romaneio-number { color: #D32F2F; font-size: 24px; float: right; margin-top: -35px; margin-right: 10px; }
             
@@ -554,7 +554,7 @@ export default function CarregamentosScreen() {
           <div class="ticket">
             <div class="header-box">
               <h2 class="header-title">LUIZ FELIPE AREOVALDO CALHIM MANOEL ABUD</h2>
-              <p class="header-cnpj">CNPJ 08.396.358/0007-82</p>
+              <p class="header-CEI">CEI: 800049398482</p>
             </div>
             
             <div class="romaneio-title">ROMANEIO</div>

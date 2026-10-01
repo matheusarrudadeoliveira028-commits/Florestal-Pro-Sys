@@ -55,7 +55,7 @@ export default function SuporteScreen() {
       <View style={styles.footer}>
         <View style={styles.divider} />
         <Text style={styles.footerText}>Brekaz Tecnologia Ltda.</Text>
-        <Text style={styles.footerVersion}>Versão 1.0.0</Text>
+        <Text style={styles.footerVersion}>Toda honra e Glória a Deus! Versão 14</Text>
       </View>
     </ScrollView>
   );

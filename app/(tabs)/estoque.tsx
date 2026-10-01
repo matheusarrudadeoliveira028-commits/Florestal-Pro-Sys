@@ -5,6 +5,42 @@ import { ActivityIndicator, Alert, Modal, RefreshControl, ScrollView, StyleSheet
 import { supabase } from '../../src/supabase';
 
 // =========================================================================
+// 🟢 FUNÇÃO INTELIGENTE PARA BURLAR O LIMITE DO CLIENTE SUPABASE (POSTGREST)
+// Faz loops de 1000 em 1000 até baixar a tabela inteira, sem travar.
+// =========================================================================
+const buscarTodasAsLinhas = async (tabela: string) => {
+  let todosOsDados: any[] = [];
+  let limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from(tabela)
+      .select('*')
+      .range(inicio, inicio + limite - 1);
+
+    if (error) {
+      console.error(`Erro ao buscar ${tabela}:`, error);
+      throw error;
+    }
+
+    if (data && data.length > 0) {
+      todosOsDados = [...todosOsDados, ...data];
+      // Se vieram menos de 1000 itens, chegamos ao final da tabela
+      if (data.length < limite) {
+        buscando = false;
+      } else {
+        inicio += limite;
+      }
+    } else {
+      buscando = false;
+    }
+  }
+  return todosOsDados;
+};
+
+// =========================================================================
 // 🟢 COMPONENTE ISOLADO: CARD DA FAZENDA COM HISTÓRICO EXPANSÍVEL
 // =========================================================================
 const FazendaEstoqueCard = memo(({ item }: { item: any }) => {
@@ -258,17 +294,16 @@ export default function EstoqueDashboard() {
     try {
       setLoading(prev => refreshing ? prev : true);
 
-      const { data: entradas, error: errEntradas } = await supabase.from('diarios_campo').select('*');
-      const { data: anteriores, error: errAnteriores } = await supabase.from('estoque_anterior').select('*');
-      const { data: saidas, error: errSaidas } = await supabase.from('carregamentos').select('*');
-      const { data: baixas, error: errBaixas } = await supabase.from('baixas_estoque').select('*');
+      // Usando a nova função para burlar o limite de requisições do App
+      const entradas = await buscarTodasAsLinhas('diarios_campo');
+      const anteriores = await buscarTodasAsLinhas('estoque_anterior');
+      const saidas = await buscarTodasAsLinhas('carregamentos');
+      const baixas = await buscarTodasAsLinhas('baixas_estoque');
 
       const { data: mapa } = await supabase.from('mapa_fazendas').select('fazenda');
       if (mapa) {
         setListaFazendas([...new Set(mapa.map(m => m.fazenda))] as string[]);
       }
-
-      if (errEntradas || errSaidas || errAnteriores || errBaixas) throw new Error('Erro ao buscar dados');
 
       const mapaEstoque: Record<string, any> = {};
 
@@ -278,7 +313,7 @@ export default function EstoqueDashboard() {
           mapaEstoque[key] = { 
             fazenda: fz, resina: res, 
             entradas: 0, anterior: 0, 
-            removidos: 0, patioAnterior: 0, // 🟢 NOVO CAMPO PARA O MATEMÁTICO DO PÁTIO
+            removidos: 0, patioAnterior: 0,
             saidas: 0, baixas: 0, 
             saldo: 0, saldoPatio: 0,
             historicoEntradas: [], historicoRemocoes: [], historicoSaidas: [] 
@@ -292,7 +327,7 @@ export default function EstoqueDashboard() {
       const dtIniObj = new Date(`${dataIniBD}T00:00:00Z`);
       const dtFimObj = new Date(`${dataFimBD}T23:59:59Z`);
 
-      // 1. Processar Saldo Inicial (Considerado como já estando no pátio!)
+      // 1. Processar Saldo Inicial
       (anteriores || []).forEach((item) => {
         const fz = item.fazenda ? item.fazenda.trim() : 'Sem Fazenda';
         const res = padronizarResina(item.tipo_resina);
@@ -314,9 +349,8 @@ export default function EstoqueDashboard() {
           
           let res = padronizarResina(item.tipo_resina, item.servico);
           if (res === '-') {
-             // Se não encontrou a resina, herda a resina que a fazenda já tem
-             const existingKey = Object.keys(mapaEstoque).find(k => k.startsWith(`${fz}|`) && !k.endsWith('|-'));
-             res = existingKey ? existingKey.split('|')[1] : 'ELLIOTTI';
+               const existingKey = Object.keys(mapaEstoque).find(k => k.startsWith(`${fz}|`) && !k.endsWith('|-'));
+               res = existingKey ? existingKey.split('|')[1] : 'ELLIOTTI';
           }
 
           const key = inicializarChave(fz, res);
@@ -391,10 +425,8 @@ export default function EstoqueDashboard() {
       const resultadoFinal = Object.values(mapaEstoque).map((item) => {
         const saldo = (item.entradas + item.anterior) - (item.saidas + item.baixas);
         
-        // 🟢 MATEMÁTICA PERFEITA DO PÁTIO:
         let saldoPatio = item.patioAnterior + item.removidos - item.saidas;
 
-        // Travas blindadas
         if (saldoPatio < 0) saldoPatio = 0;
         if (saldo > 0 && saldoPatio > saldo) saldoPatio = saldo;
         if (saldo <= 0) saldoPatio = 0; 
@@ -406,7 +438,6 @@ export default function EstoqueDashboard() {
         return { ...item, saldo, saldoPatio };
       });
 
-      // Remove as fazendas zeradas do visual
       const estoqueLimpo = resultadoFinal.filter(i => i.saldo !== 0 || i.entradas !== 0 || i.saidas !== 0 || i.baixas !== 0 || i.anterior !== 0 || i.removidos !== 0);
 
       estoqueLimpo.sort((a, b) => {
@@ -414,7 +445,6 @@ export default function EstoqueDashboard() {
         return a.fazenda.localeCompare(b.fazenda);
       });
 
-      // 🟢 O TOTAL GLOBAL AGORA LÊ EXATAMENTE O QUE FICOU NA TELA!
       let sumGlobal = 0;
       let sumPatio = 0;
       estoqueLimpo.forEach(item => {
@@ -426,8 +456,12 @@ export default function EstoqueDashboard() {
       setTotalGlobal(sumGlobal);
       setTotalPatioGlobal(sumPatio);
 
-    } catch (error) {
+    } catch (error: any) {
       console.log('Erro ao calcular estoque:', error);
+      Alert.alert(
+        "Erro ao carregar dados", 
+        error instanceof Error ? error.message : JSON.stringify(error)
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);

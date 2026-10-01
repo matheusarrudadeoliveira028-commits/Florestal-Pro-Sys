@@ -159,6 +159,37 @@ export default function AcompanhamentoScreen() {
     return null;
   };
 
+  const formatarDataIso = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const padronizarDataDoBanco = (dataLanc: string) => {
+    if (!dataLanc) return '';
+    let d = String(dataLanc).split('T')[0].split(' ')[0].trim();
+    if (d.includes('/')) {
+      const p = d.split('/');
+      if (p.length === 3) {
+        if (p[2].length >= 4) return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+        else return `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+      }
+    }
+    return d;
+  };
+
+  const verificarSeAusencia = (servicoNome: string) => {
+    if (!servicoNome) return false;
+    const s = servicoNome.toUpperCase();
+    return s.includes('ATESTADO') || 
+           s.includes('ABONO') || 
+           s.includes('ABONADO') || 
+           s.includes('DECLARAÇÃO') || 
+           s.includes('AFASTAMENTO') || 
+           s.includes('LICENÇA');
+  };
+
   const buscarProducaoDoDia = async () => {
     const dataBD = converterDataParaBanco(dataSelecionada);
     if (!dataBD) return;
@@ -192,7 +223,7 @@ export default function AcompanhamentoScreen() {
         }
       }
 
-      // 1. BUSCA DIÁRIOS DE CAMPO
+      // 1. BUSCA DIÁRIOS DE CAMPO DO DIA
       let queryProd = supabase
         .from('diarios_campo')
         .select('*')
@@ -204,8 +235,61 @@ export default function AcompanhamentoScreen() {
         queryProd = queryProd.eq('fiscal_nome', fiscalNomeQuery);
       }
       
-      const { data, error } = await queryProd;
+      const { data: dataDia, error } = await queryProd;
       if (error) throw error;
+
+      let data = [...(dataDia || [])];
+
+      // 🟢 1.1. RESGATE DE ATESTADOS E AUSÊNCIAS EM ATÉ 180 DIAS
+      try {
+        const pData = dataBD.split('-');
+        const dtAntiga = new Date(parseInt(pData[0], 10), parseInt(pData[1], 10) - 1, parseInt(pData[2], 10));
+        dtAntiga.setDate(dtAntiga.getDate() - 180);
+        const dataBuscaAntigaBD = formatarDataIso(dtAntiga);
+
+        let queryAusencias = supabase
+          .from('diarios_campo')
+          .select('*')
+          .gte('data', `${dataBuscaAntigaBD} 00:00:00`)
+          .lt('data', `${dataBD} 00:00:00`)
+          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%');
+
+        if (fiscalIdQuery !== 'TODOS') {
+          queryAusencias = queryAusencias.eq('fiscal_nome', fiscalNomeQuery);
+        }
+
+        const { data: ausenciasData } = await queryAusencias;
+
+        if (ausenciasData && ausenciasData.length > 0) {
+          const ausenciasVigentesHoje = ausenciasData.filter((r: any) => {
+            if (!verificarSeAusencia(r.servico)) return false;
+
+            const dataInicioAusencia = padronizarDataDoBanco(r.data_atestado || r.data);
+            if (!dataInicioAusencia) return false;
+
+            const dias = parseInt(r.dias_atestado, 10) || 1;
+
+            const pIniAusencia = dataInicioAusencia.split('-');
+            const dtFimAusencia = new Date(parseInt(pIniAusencia[0], 10), parseInt(pIniAusencia[1], 10) - 1, parseInt(pIniAusencia[2], 10));
+            dtFimAusencia.setDate(dtFimAusencia.getDate() + dias - 1);
+
+            const dataFimAusenciaStr = formatarDataIso(dtFimAusencia);
+
+            return dataBD >= dataInicioAusencia && dataBD <= dataFimAusenciaStr;
+          });
+
+          ausenciasVigentesHoje.forEach((aus: any) => {
+            const jaRegistradoHoje = data.some(
+              (d: any) => String(d.colaborador || '').trim().toUpperCase() === String(aus.colaborador || '').trim().toUpperCase()
+            );
+            if (!jaRegistradoHoje) {
+              data.push(aus);
+            }
+          });
+        }
+      } catch (errAusencia) {
+        console.warn('Aviso: Falha ao buscar ausências antigas:', errAusencia);
+      }
 
       // 2. BUSCA O TAMANHO DA EQUIPE VINCULADA
       let queryEquipe = supabase.from('colaboradores').select('nome');
@@ -226,7 +310,7 @@ export default function AcompanhamentoScreen() {
       if (data) {
         data.forEach(d => {
           const srv = String(d.servico || '').toUpperCase();
-          if (srv.includes('ATESTADO') || srv.includes('ABONADO')) {
+          if (verificarSeAusencia(srv)) {
             if (d.colaborador) atestadosUnicos.add(String(d.colaborador).trim().toUpperCase());
           } else {
             if (d.colaborador) produtoresUnicos.add(String(d.colaborador).trim().toUpperCase());
@@ -248,7 +332,7 @@ export default function AcompanhamentoScreen() {
       // =========================================================
       // PROCESSAMENTO DA TABELA E RESUMO COM ATESTADO INTELIGENTE
       // =========================================================
-      if (data) {
+      if (data && data.length > 0) {
         const registrosAgrupados = data.reduce((acc: any, item: any) => {
           const isAtestado = String(item.servico || '').toUpperCase().includes('ATESTADO');
           
