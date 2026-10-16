@@ -13,8 +13,14 @@ const alertaHibrido = (titulo: string, mensagem: string) => {
   else Alert.alert(titulo, mensagem);
 };
 
+// 🟢 FUNÇÃO INTELIGENTE QUE IGNORA ACENTOS E FORMATA TEXTO
+const normalizarTexto = (txt: string) => {
+  if (!txt) return '';
+  return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+};
+
 // =========================================================================
-// COMPONENTES ISOLADOS E MEMOIZADOS (React.memo) - MÁXIMA PERFORMANCE
+// COMPONENTES ISOLADOS E MEMOIZADOS (React.memo)
 // =========================================================================
 const FazendaHeader = memo(({ nome, total }: { nome: string, total: number }) => (
   <View style={styles.fazendaHeader}>
@@ -30,7 +36,6 @@ const QuadraHeader = memo(({ nome, total }: { nome: string, total: number }) => 
   </View>
 ));
 
-// 🟢 ITEM OTIMIZADO: Sem estilos inline (style={{...}}) para evitar recálculos do Garbage Collector
 const RamalItem = memo(({ r, podeEditar, aoTocar }: any) => {
   return (
     <TouchableOpacity
@@ -92,12 +97,16 @@ export default function MapaScreen() {
   const [listaPlanaParaUI, setListaPlanaParaUI] = useState<any[]>([]);
   
   const [totalGeralArvores, setTotalGeralArvores] = useState(0);
-  const [totalGeralResumo, setTotalGeralResumo] = useState(0); // 🟢 ESTADO DO TOTAL DO RESUMO
+  const [totalGeralResumo, setTotalGeralResumo] = useState(0); 
   const [carregando, setCarregando] = useState(false); 
   const [gerandoPDF, setGerandoPDF] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [listaServicos, setListaServicos] = useState<any[]>([]);
+  
+  // ESTADOS DE SEGURANÇA E ACESSO
   const [podeEditar, setPodeEditar] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [fazendasPermitidas, setFazendasPermitidas] = useState<string[]>([]);
 
   const [dicionario, setDicionario] = useState<any>({});
   const [listaResumo, setListaResumo] = useState<any[]>([]);
@@ -110,22 +119,24 @@ export default function MapaScreen() {
   const [buscaQuadra, setBuscaQuadra] = useState('');
   const [buscaRamal, setBuscaRamal] = useState('');
 
-  // 🟢 ESTADOS DO MODAL DE EDIÇÃO E EXCLUSÃO
   const [ramalEditando, setRamalEditando] = useState<any>(null);
   const [editServico, setEditServico] = useState('');
   const [editQtd, setEditQtd] = useState('');
 
   useEffect(() => {
     const tarefa = InteractionManager.runAfterInteractions(() => {
-      verificarPerfil();
-      carregarDicionarioEServicos(); 
+      inicializarTela();
     });
     return () => tarefa.cancel();
   }, []);
 
+  const inicializarTela = async () => {
+    const { admin, permitidas } = await verificarPerfil();
+    await carregarDicionarioEServicos(admin, permitidas);
+  };
+
   useEffect(() => {
     if (buscaFazenda && dicionario[buscaFazenda]) {
-      // 🟢 CORREÇÃO DA ORDEM DAS QUADRAS (Ex: 1, 2, 10, 30)
       const quadras = Object.keys(dicionario[buscaFazenda].quadras).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       setQuadrasDisponiveis(quadras);
     } else {
@@ -136,7 +147,6 @@ export default function MapaScreen() {
 
   useEffect(() => {
     if (buscaFazenda && buscaQuadra && dicionario[buscaFazenda]?.quadras[buscaQuadra]) {
-      // 🟢 CORREÇÃO DA ORDEM DOS RAMAIS
       const ramais = dicionario[buscaFazenda].quadras[buscaQuadra].ramais.sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
       setRamaisDisponiveis(ramais);
     } else {
@@ -146,19 +156,35 @@ export default function MapaScreen() {
   }, [buscaQuadra, buscaFazenda, dicionario]);
 
   const verificarPerfil = async () => {
+    let admin = false;
+    let permitidas: string[] = [];
+
     try {
       const perfilSalvo = await AsyncStorage.getItem('@perfil_offline');
       if (perfilSalvo) {
         const perfil = JSON.parse(perfilSalvo);
-        const cargoLimpo = perfil.cargo ? perfil.cargo.trim().toLowerCase() : '';
-        setPodeEditar(cargoLimpo === 'administrador' || cargoLimpo === 'supervisor');
+        const cargoLimpo = perfil.cargo ? normalizarTexto(perfil.cargo) : '';
+        
+        admin = (cargoLimpo === 'ADMINISTRADOR' || cargoLimpo === 'SUPERVISOR');
+        setIsAdmin(admin);
+        setPodeEditar(admin);
+
+        // APLICA O NORMALIZADOR NAS FAZENDAS DIGITADAS NO PAINEL
+        if (perfil.fazendas_permitidas) {
+          permitidas = Array.isArray(perfil.fazendas_permitidas) 
+            ? perfil.fazendas_permitidas.map((f: string) => normalizarTexto(f))
+            : perfil.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+        }
+        setFazendasPermitidas(permitidas);
       }
     } catch (e) {
       setPodeEditar(false);
     }
+    
+    return { admin, permitidas };
   };
 
-  const carregarDicionarioEServicos = async () => {
+  const carregarDicionarioEServicos = async (admin: boolean, permitidas: string[]) => {
     setCarregando(true);
     try {
       const { data: servs } = await supabase.from('servicos').select('*').order('nome');
@@ -167,12 +193,14 @@ export default function MapaScreen() {
         await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs));
       }
 
-      // 🟢 MANTIDO O LIMITE QUE VOCÊ COLOCOU: 6000
-      const { data: mapaResumo, error } = await supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes').limit(6000);
+      // 🟢 PUXA TUDO E DEIXA O APLICATIVO FILTRAR ISSO INTELIGENTEMENTE
+      const queryMapa = supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes').limit(6000);
+      const { data: mapaResumo, error } = await queryMapa;
+      
       if (error) throw new Error("Falha na rede");
 
       if (mapaResumo) {
-        montarDicionario(mapaResumo);
+        montarDicionario(mapaResumo, admin, permitidas);
         await AsyncStorage.setItem('@mochila_dicionario_mapa', JSON.stringify(mapaResumo));
       }
       setIsOffline(false);
@@ -182,37 +210,49 @@ export default function MapaScreen() {
       if (servsOffline) setListaServicos(JSON.parse(servsOffline));
 
       const mapaOffline = await AsyncStorage.getItem('@mochila_dicionario_mapa');
-      if (mapaOffline) montarDicionario(JSON.parse(mapaOffline));
+      if (mapaOffline) montarDicionario(JSON.parse(mapaOffline), admin, permitidas);
     }
     setCarregando(false);
   };
 
-  const montarDicionario = (data: any[]) => {
+  const montarDicionario = (data: any[], admin: boolean, permitidas: string[]) => {
     const dic: any = {};
-    let somaResumoLocal = 0; // 🟢 ACUMULADOR DO TOTAL DO RESUMO
-    // 🟢 CORREÇÃO: Forçando .toUpperCase() para agrupar Fazendas com grafias diferentes
-    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
+    let somaResumoLocal = 0; 
+    
+    // Mantém a visualização bonita na tela
+    const limparVisual = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
     data.forEach(item => {
-      const faz = limpar(item.fazenda);
-      const qdr = limpar(item.quadra);
-      const ramal = limpar(item.ramal);
+      const fazVisual = limparVisual(item.fazenda);
+      const fazNorm = normalizarTexto(item.fazenda); // Formato limpo sem acento para checagem
+
+      // 🟢 BLOQUEIO INTELIGENTE: Verifica se a fazenda atual contém algum texto permitido
+      let acessoPermitido = admin;
+      if (!admin && permitidas.length > 0) {
+        acessoPermitido = permitidas.some(p => fazNorm.includes(p));
+      }
+
+      // Se a regra disse não, descarta a fazenda e vai para a próxima linha
+      if (!acessoPermitido) return;
+
+      const qdr = limparVisual(item.quadra);
+      const ramal = limparVisual(item.ramal);
       const pes = item.total_pes || 0;
 
-      somaResumoLocal += pes; // 🟢 SOMA GERAL FEITA AQUI SEM CUSTO EXTRA
+      somaResumoLocal += pes; 
 
-      if (!dic[faz]) dic[faz] = { total: 0, quadras: {} };
-      dic[faz].total += pes;
+      if (!dic[fazVisual]) dic[fazVisual] = { total: 0, quadras: {} };
+      dic[fazVisual].total += pes;
 
-      if (!dic[faz].quadras[qdr]) dic[faz].quadras[qdr] = { total: 0, ramais: [] };
-      dic[faz].quadras[qdr].total += pes;
+      if (!dic[fazVisual].quadras[qdr]) dic[fazVisual].quadras[qdr] = { total: 0, ramais: [] };
+      dic[fazVisual].quadras[qdr].total += pes;
 
-      if (!dic[faz].quadras[qdr].ramais.includes(ramal)) {
-        dic[faz].quadras[qdr].ramais.push(ramal);
+      if (!dic[fazVisual].quadras[qdr].ramais.includes(ramal)) {
+        dic[fazVisual].quadras[qdr].ramais.push(ramal);
       }
     });
 
-    setTotalGeralResumo(somaResumoLocal); // 🟢 SETA O TOTAL PARA A TELA
+    setTotalGeralResumo(somaResumoLocal); 
     setDicionario(dic);
     setFazendasDisponiveis(Object.keys(dic).sort());
 
@@ -222,7 +262,7 @@ export default function MapaScreen() {
       quadras: Object.keys(dic[faz].quadras).map(qdr => ({
         quadra: qdr,
         total: dic[faz].quadras[qdr].total
-      })).sort((a, b) => a.quadra.localeCompare(b.quadra, undefined, { numeric: true })) // 🟢 ORDENAÇÃO NUMÉRICA NO RESUMO
+      })).sort((a, b) => a.quadra.localeCompare(b.quadra, undefined, { numeric: true })) 
     })).sort((a, b) => a.fazenda.localeCompare(b.fazenda));
 
     setListaResumo(resumo);
@@ -236,7 +276,7 @@ export default function MapaScreen() {
     setCarregando(true);
 
     try {
-      // 🟢 IGNORANDO CASE SENSITIVE NA BUSCA (ilike)
+      // Como o dicionário de buscaFazenda JÁ ESTÁ BLOQUEADO e filtrado, não precisa aplicar filtro rígido aqui
       let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').ilike('fazenda', buscaFazenda);
       
       if (buscaQuadra) query = query.ilike('quadra', buscaQuadra);
@@ -263,9 +303,17 @@ export default function MapaScreen() {
       if (mapaOffline) {
         let dadosOff = JSON.parse(mapaOffline);
         
-        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => i.fazenda.toUpperCase() === buscaFazenda.toUpperCase());
-        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => i.quadra.toUpperCase() === buscaQuadra.toUpperCase());
-        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => String(i.ramal).toUpperCase() === String(buscaRamal).toUpperCase());
+        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => normalizarTexto(i.fazenda) === normalizarTexto(buscaFazenda));
+        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => normalizarTexto(i.quadra) === normalizarTexto(buscaQuadra));
+        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => normalizarTexto(String(i.ramal)) === normalizarTexto(String(buscaRamal)));
+
+        // Segurança offline extra
+        if (!isAdmin && fazendasPermitidas.length > 0) {
+           dadosOff = dadosOff.filter((i: any) => {
+             const fNorm = normalizarTexto(i.fazenda);
+             return fazendasPermitidas.some(p => fNorm.includes(p));
+           });
+        }
 
         if (dadosOff.length > 0) {
           setDadosBrutos(dadosOff);
@@ -287,10 +335,8 @@ export default function MapaScreen() {
   const processarDadosMapa = (data: any[]) => {
     let somaGeral = 0;
     const agrupamento: any = {};
-    // 🟢 CORREÇÃO: Forçando .toUpperCase() também no detalhamento
     const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
-    // 🟢 CORREÇÃO DA ORDENAÇÃO NUMÉRICA DO RESULTADO E PDF
     const dadosOrdenados = [...data].sort((a, b) => {
       const fazA = limpar(a.fazenda);
       const fazB = limpar(b.fazenda);
@@ -470,7 +516,6 @@ export default function MapaScreen() {
     }
   };
 
-  // 🟢 AÇÕES DO MODAL (EDITAR E EXCLUIR)
   const abrirModalEdicao = useCallback((ramal: any) => {
     setEditServico(ramal.servico);
     setEditQtd(ramal.total.toString());
@@ -486,7 +531,8 @@ export default function MapaScreen() {
       const novaListaBruta = dadosBrutos.map(item => item.id === id ? { ...item, [campo]: valor } : item);
       setDadosBrutos(novaListaBruta);
       processarDadosMapa(novaListaBruta);
-      carregarDicionarioEServicos();
+      
+      carregarDicionarioEServicos(isAdmin, fazendasPermitidas);
     }
     setCarregando(false);
   };
@@ -547,7 +593,7 @@ export default function MapaScreen() {
       const novaListaBruta = dadosBrutos.filter(item => item.id !== id);
       setDadosBrutos(novaListaBruta);
       processarDadosMapa(novaListaBruta);
-      carregarDicionarioEServicos();
+      carregarDicionarioEServicos(isAdmin, fazendasPermitidas);
       setRamalEditando(null);
     }
     setCarregando(false);
@@ -590,7 +636,6 @@ export default function MapaScreen() {
 
       {abaAtiva === 'resumo' && (
         <View style={styles.flex1}>
-          {/* 🟢 TOTAL GERAL DISCRETO EXIBIDO AQUI */}
           {!carregando && listaResumo.length > 0 && (
             <Text style={styles.textoTotalResumo}>
               🌳 Total Geral Cadastrado: {totalGeralResumo.toLocaleString('pt-BR')} pés
@@ -676,10 +721,9 @@ export default function MapaScreen() {
               data={listaPlanaParaUI}
               keyExtractor={(item) => item.id}
               renderItem={renderItem}
-              // 🟢 OTIMIZAÇÕES EXTREMAS DE LISTA 🟢
               initialNumToRender={12} 
               maxToRenderPerBatch={10}
-              windowSize={3} // Reduz brutalmente o uso de memória (padrão é 21)
+              windowSize={3} 
               updateCellsBatchingPeriod={30}
               removeClippedSubviews={true}
               contentContainerStyle={styles.listaPadding}
@@ -688,7 +732,6 @@ export default function MapaScreen() {
         </>
       )}
 
-      {/* 🟢 MODAL DE EDIÇÃO E EXCLUSÃO GLOBAL */}
       <Modal visible={!!ramalEditando} transparent={true} animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
@@ -747,59 +790,44 @@ const styles = StyleSheet.create({
   flex1: { flex: 1 },
   loaderMargin: { marginTop: 30 },
   textoVazio: { textAlign: 'center', color: '#7F8C8D', marginTop: 20 },
-  
-  // 🟢 ESTILO NOVO: TEXTO TOTAL DISCRETO
   textoTotalResumo: { textAlign: 'right', color: '#95A5A6', fontSize: 12, fontStyle: 'italic', marginBottom: 8, marginRight: 5 },
-  
   listaPaddingBottom: { paddingBottom: 50 },
   listaPadding: { paddingBottom: 50, paddingTop: 10 },
   flex1MargemDireita: { flex: 1, marginRight: 10 },
   btnBottomRight: { justifyContent: 'flex-end' },
   rowRightPdf: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 },
   marginB15: { marginBottom: 15 },
-
   offlineBadge: { backgroundColor: '#E74C3C', padding: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 5, marginBottom: 10 },
   offlineText: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
   header: { marginBottom: 15, marginTop: 10, alignItems: 'center' },
   title: { fontSize: 26, fontWeight: 'bold', color: '#2C3E50' },
   subtitle: { fontSize: 14, color: '#7F8C8D', marginTop: 3 },
-  
   menuAbas: { flexDirection: 'row', backgroundColor: '#E0E6ED', borderRadius: 10, padding: 4, marginBottom: 15 },
   abaBotao: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
   abaAtiva: { backgroundColor: '#FFFFFF', elevation: 2 },
   abaTexto: { fontWeight: 'bold', color: '#7F8C8D' },
   abaTextoAtivo: { color: '#2980B9' },
-
   filtrosCard: { backgroundColor: '#FFFFFF', padding: 15, borderRadius: 12, marginBottom: 15, elevation: 2, borderWidth: 1, borderColor: '#E0E6ED' },
   filtrosTitulo: { fontSize: 16, fontWeight: 'bold', color: '#34495E', marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#ECF0F1', paddingBottom: 5 },
-  
   row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   col: { width: '48%' },
-  
   labelInput: { fontSize: 12, fontWeight: 'bold', color: '#7F8C8D', marginBottom: 5 },
-  
   btnBuscarFazenda: { backgroundColor: '#2980B9', height: 45, paddingHorizontal: 20, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
   btnBuscarFazendaTexto: { color: '#FFF', fontWeight: 'bold', fontSize: 15 },
-  
   pickerWrapper: { borderWidth: 1, borderColor: '#BDC3C7', borderRadius: 8, backgroundColor: '#F8FAFC', height: 45, justifyContent: 'center', overflow: 'hidden' },
   pickerItem: { height: 60, width: '100%', color: '#2C3E50' },
   pickerDisabled: { opacity: 0.5, backgroundColor: '#EAEDED' },
-
   placarCard: { backgroundColor: '#27AE60', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 15, elevation: 3 },
   placarTexto: { color: '#D5F5E3', fontSize: 15, fontWeight: 'bold' },
   placarNumero: { color: '#FFFFFF', fontSize: 40, fontWeight: '900', marginVertical: 5 },
-  
   btnPdf: { width: 180, backgroundColor: '#E67E22', padding: 12, borderRadius: 8, alignItems: 'center' },
   btnPdfTexto: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  
   fazendaHeader: { backgroundColor: '#FFFFFF', padding: 15, marginTop: 15, borderTopLeftRadius: 12, borderTopRightRadius: 12, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 3, borderBottomColor: '#2C3E50', elevation: 1 },
   fazendaTitulo: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50' },
   fazendaTotal: { fontSize: 16, fontWeight: 'bold', color: '#27AE60' },
-  
   quadraHeader: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#EAEDED', padding: 10, borderBottomWidth: 1, borderBottomColor: '#D5DBDB', marginTop: 5 },
   quadraTitulo: { fontSize: 15, fontWeight: 'bold', color: '#34495E' },
   quadraTotal: { fontSize: 15, fontWeight: 'bold', color: '#D35400' },
-  
   ramalWrapper: { backgroundColor: '#F8FAFC', paddingHorizontal: 10 }, 
   ramalItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, backgroundColor: '#F8FAFC', borderBottomWidth: 1, borderBottomColor: '#F2F4F4', alignItems: 'center' },
   ramalCol1: { flex: 1.5 },
@@ -809,7 +837,6 @@ const styles = StyleSheet.create({
   ramalServico: { fontWeight: 'bold', color: '#2980B9' },
   ramalTotal: { fontSize: 15, fontWeight: 'bold', color: '#D35400' },
   ramalDicaEditar: { fontSize: 11, color: '#3498DB', marginTop: 4 },
-
   resumoCard: { backgroundColor: '#FFF', borderRadius: 10, marginBottom: 15, elevation: 2, borderWidth: 1, borderColor: '#BDC3C7', overflow: 'hidden' },
   resumoHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, backgroundColor: '#2C3E50', alignItems: 'center' },
   resumoFazendaNome: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
@@ -820,18 +847,14 @@ const styles = StyleSheet.create({
   resumoQuadraRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#EAEDED' },
   resumoQuadraNome: { color: '#34495E', fontSize: 15, fontWeight: 'bold' },
   resumoQuadraTotal: { color: '#D35400', fontSize: 15, fontWeight: 'bold' },
-
-  // 🟢 ESTILOS DO MODAL DE EDIÇÃO E EXCLUSÃO
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
   modalContainer: { backgroundColor: '#FFF', padding: 20, borderRadius: 12, elevation: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50', marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#ECF0F1', paddingBottom: 10 },
   inputModalQtd: { backgroundColor: '#F8FAFC', color: '#2C3E50', paddingHorizontal: 10, borderRadius: 6, fontSize: 14, fontWeight: 'bold', borderWidth: 1, borderColor: '#BDC3C7', marginBottom: 25, height: 45 },
-  
   modalActionsCol: { flexDirection: 'column' },
   btnModalSalvar: { backgroundColor: '#27AE60', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
   btnModalCancelar: { backgroundColor: '#EAEDED', padding: 12, borderRadius: 8, flex: 1, alignItems: 'center', marginRight: 5 },
   btnModalExcluir: { backgroundColor: '#E74C3C', padding: 12, borderRadius: 8, flex: 1, alignItems: 'center', marginLeft: 5 },
-  
   btnModalTexto: { color: '#FFF', fontWeight: 'bold', fontSize: 15 },
   btnModalTextoCinzento: { color: '#34495E', fontWeight: 'bold', fontSize: 15 }
 });

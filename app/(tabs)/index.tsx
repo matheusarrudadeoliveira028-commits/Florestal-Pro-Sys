@@ -26,7 +26,6 @@ const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () 
   }
 };
 
-// 🟢 FUNÇÃO BLINDADA: Evita tela branca (crash) convertendo de forma segura qualquer tipo de dado
 const converterParaNumero = (valor: any): number => {
   if (valor === null || valor === undefined || valor === '') return 0;
   const valorFormatado = String(valor).replace(',', '.');
@@ -34,9 +33,28 @@ const converterParaNumero = (valor: any): number => {
   return isNaN(numeroParsed) ? 0 : numeroParsed;
 };
 
-// =========================================================================
-// COMPONENTE ISOLADO DE RELÓGIO
-// =========================================================================
+const normalizarTexto = (txt: string) => {
+  if (!txt) return '';
+  return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+};
+
+// 🟢 FUNÇÃO INTELIGENTE: Impede confusão entre serviços parecidos (ex: Estria Normal vs Estria em V)
+const calcularSimilaridade = (str1: string, str2: string): number => {
+  // Limpa caracteres especiais e deixa apenas letras e números
+  const limpo1 = normalizarTexto(str1).replace(/[^A-Z0-9 ]/g, '');
+  const limpo2 = normalizarTexto(str2).replace(/[^A-Z0-9 ]/g, '');
+  
+  // Remove o "S" no final das palavras para que "ESTRIA" e "ESTRIAS" sejam considerados iguais
+  const palavras1 = limpo1.split(/\s+/).map(p => p.replace(/S$/, ''));
+  const palavras2 = limpo2.split(/\s+/).map(p => p.replace(/S$/, ''));
+  
+  let match = 0;
+  palavras1.forEach(p1 => {
+    if (p1.length > 0 && palavras2.includes(p1)) match++;
+  });
+  return match;
+};
+
 const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
   const [horaAtual, setHoraAtual] = useState(new Date());
 
@@ -55,9 +73,6 @@ const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
   );
 });
 
-// =========================================================================
-// TELA PRINCIPAL
-// =========================================================================
 export default function HomeScreen() {
   const [colaborador, setColaborador] = useState('');
   const [servico, setServico] = useState('');
@@ -73,6 +88,7 @@ export default function HomeScreen() {
   
   const [listaColaboradores, setListaColaboradores] = useState<any[]>([]);
   const [listaServicos, setListaServicos] = useState<any[]>([]);
+  const [servicosFiltrados, setServicosFiltrados] = useState<any[]>([]);
   const [mapaCompleto, setMapaCompleto] = useState<any[]>([]);
   const [fazendasDisponiveis, setFazendasDisponiveis] = useState<string[]>([]);
   const [quadrasDisponiveis, setQuadrasDisponiveis] = useState<string[]>([]);
@@ -87,11 +103,9 @@ export default function HomeScreen() {
   
   const [isOffline, setIsOffline] = useState(false);
 
-  // Controle de Horário Permitido
   const [horaInicioPermitida, setHoraInicioPermitida] = useState('06:00');
   const [horaFimPermitida, setHoraFimPermitida] = useState('23:00');
 
-  // ESTADOS DE EDIÇÃO
   const [modalPendentesVisivel, setModalPendentesVisivel] = useState(false);
   const [indexEdicao, setIndexEdicao] = useState<number | null>(null);
   const [dataOriginalEdicao, setDataOriginalEdicao] = useState<string | null>(null);
@@ -154,6 +168,20 @@ export default function HomeScreen() {
   const carregarDadosBase = async (perfilLido: any, userIdLido: string | null) => {
     setCarregandoDados(true);
     try {
+      let admin = false;
+      let permitidas: string[] = [];
+
+      if (perfilLido) {
+        const cargoLimpo = perfilLido.cargo ? normalizarTexto(perfilLido.cargo) : '';
+        admin = (cargoLimpo === 'ADMINISTRADOR' || cargoLimpo === 'SUPERVISOR');
+        
+        if (perfilLido.fazendas_permitidas) {
+          permitidas = Array.isArray(perfilLido.fazendas_permitidas) 
+            ? perfilLido.fazendas_permitidas.map((f: string) => normalizarTexto(f))
+            : perfilLido.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+        }
+      }
+
       let { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
       const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
       const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
@@ -168,21 +196,31 @@ export default function HomeScreen() {
       }
 
       if (colabs) {
-        if (perfilLido && perfilLido.cargo !== 'Administrador') {
-          colabs = colabs.filter(c => 
-            c.fiscal_vinculado === perfilLido.nome || 
-            c.fiscal_id === perfilLido.id
-          );
+        if (!admin) {
+          colabs = colabs.filter(c => c.fiscal_vinculado === perfilLido.nome || c.fiscal_id === perfilLido.id);
         }
         setListaColaboradores(colabs); 
         await AsyncStorage.setItem('@mochila_colaboradores', JSON.stringify(colabs)); 
       }
-      if (servs) { setListaServicos(servs); await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs)); }
-      if (mapa) {
-        setMapaCompleto(mapa);
-        setFazendasDisponiveis([...new Set(mapa.map(item => item.fazenda))] as string[]);
-        await AsyncStorage.setItem('@mochila_mapa', JSON.stringify(mapa));
+      
+      if (servs) { 
+        setListaServicos(servs); 
+        setServicosFiltrados(servs); 
+        await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs)); 
       }
+      
+      if (mapa) {
+        const mapaFiltrado = mapa.filter(item => {
+          if (admin || permitidas.length === 0) return true;
+          const fazNorm = normalizarTexto(item.fazenda);
+          return permitidas.some(p => fazNorm.includes(p));
+        });
+
+        setMapaCompleto(mapaFiltrado);
+        setFazendasDisponiveis([...new Set(mapaFiltrado.map(item => item.fazenda))] as string[]);
+        await AsyncStorage.setItem('@mochila_mapa', JSON.stringify(mapaFiltrado));
+      }
+      
       setIsOffline(false);
     } catch (error) {
       setIsOffline(true);
@@ -197,14 +235,36 @@ export default function HomeScreen() {
         setHoraFimPermitida(conf.fim);
       }
       if (mochilaColabs) setListaColaboradores(JSON.parse(mochilaColabs));
+      
       if (mochilaServs) {
-        const servicosMochila = JSON.parse(mochilaServs);
-        setListaServicos(servicosMochila.filter((s: any) => s.bloqueado !== true));
+        const servicosMochila = JSON.parse(mochilaServs).filter((s: any) => s.bloqueado !== true);
+        setListaServicos(servicosMochila);
+        setServicosFiltrados(servicosMochila);
       }
+      
       if (mochilaMapa) {
+        let admin = false;
+        let permitidas: string[] = [];
+
+        if (perfilLido) {
+          const cargoLimpo = perfilLido.cargo ? normalizarTexto(perfilLido.cargo) : '';
+          admin = (cargoLimpo === 'ADMINISTRADOR' || cargoLimpo === 'SUPERVISOR');
+          if (perfilLido.fazendas_permitidas) {
+            permitidas = Array.isArray(perfilLido.fazendas_permitidas) 
+              ? perfilLido.fazendas_permitidas.map((f: string) => normalizarTexto(f))
+              : perfilLido.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+          }
+        }
+
         const mapaParsed = JSON.parse(mochilaMapa);
-        setMapaCompleto(mapaParsed);
-        setFazendasDisponiveis([...new Set(mapaParsed.map((item: any) => item.fazenda))] as string[]);
+        const mapaFiltrado = mapaParsed.filter((item: any) => {
+          if (admin || permitidas.length === 0) return true;
+          const fazNorm = normalizarTexto(item.fazenda);
+          return permitidas.some(p => fazNorm.includes(p));
+        });
+
+        setMapaCompleto(mapaFiltrado);
+        setFazendasDisponiveis([...new Set(mapaFiltrado.map((item: any) => item.fazenda))] as string[]);
       }
     }
     setCarregandoDados(false);
@@ -244,6 +304,35 @@ export default function HomeScreen() {
   }, [quadra, fazenda, mapaCompleto]);
 
   useEffect(() => {
+    if (!fazenda) {
+      setServicosFiltrados(listaServicos);
+      return;
+    }
+
+    const fazendaNorm = normalizarTexto(fazenda);
+    
+    const filtrados = listaServicos.filter(s => {
+      if (!s.fazendas_permitidas) return true;
+
+      let permitidas: string[] = [];
+      if (Array.isArray(s.fazendas_permitidas)) {
+        permitidas = s.fazendas_permitidas.map(f => normalizarTexto(f));
+      } else {
+        permitidas = String(s.fazendas_permitidas).split(',').map(f => normalizarTexto(f));
+      }
+
+      return permitidas.some(p => fazendaNorm.includes(p) || p.includes(fazendaNorm));
+    });
+
+    setServicosFiltrados(filtrados);
+
+    if (servico && !filtrados.find(s => s.nome === servico)) {
+      setServico('');
+      setServicoSelecionadoCompleto(null);
+    }
+  }, [fazenda, listaServicos]);
+
+  useEffect(() => {
     if (servicoSelecionadoCompleto && quantidade) {
       const qtdNum = converterParaNumero(quantidade);
       let valorUnitario = servicoSelecionadoCompleto.preco_base || 0;
@@ -256,51 +345,60 @@ export default function HomeScreen() {
   const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
-  // 🟢 CÁLCULO INTELIGENTE DO TOTAL DE PÉS POR SERVIÇO (AGORA LÊ A COLUNA "servico_permitido")
-  let somaPesSelecionados = 0;
-  ramaisSelecionados.forEach(ramalStr => {
-     const cadastrosDoRamal = mapaCompleto.filter(m => 
-         m.fazenda === fazenda && 
-         m.quadra === quadra && 
-         String(m.ramal) === ramalStr
-     );
+  // 🟢 LÓGICA REFEITA: Extrai as capacidades e faz correspondência inteligente sem confundir
+  let capacidadesDisponiveis: { servico: string, total: number }[] = [];
+  let limitePesCalculado: number | null = null;
 
-     if (cadastrosDoRamal.length > 0) {
-         const servicoFormatado = String(servico).trim().toUpperCase();
+  if (ramaisSelecionados.length > 0) {
+    const cadastrosSelecionados = mapaCompleto.filter(m => 
+        m.fazenda === fazenda && 
+        m.quadra === quadra && 
+        ramaisSelecionados.includes(String(m.ramal))
+    );
 
-         // 1º Tenta achar a linha com o nome do serviço EXATO (ex: 'ESTRIAS NORMAL')
-         const cadastroExato = cadastrosDoRamal.find(m => 
-             m.servico_permitido && 
-             String(m.servico_permitido).trim().toUpperCase() === servicoFormatado
-         );
-         
-         if (cadastroExato) {
-             somaPesSelecionados += converterParaNumero(cadastroExato.total_pes);
-         } else {
-             // 2º Tenta achar se contém parte do nome (ex: O usuário escolheu 'ESTRIAS' e no banco tem 'ESTRIA NORMAL')
-             const cadastroAproximado = cadastrosDoRamal.find(m => 
-                 m.servico_permitido && 
-                 (String(m.servico_permitido).toUpperCase().includes(servicoFormatado) || 
-                  servicoFormatado.includes(String(m.servico_permitido).toUpperCase()))
-             );
-             
-             if (cadastroAproximado) {
-                 somaPesSelecionados += converterParaNumero(cadastroAproximado.total_pes);
-             } else {
-                 // 3º Se não achou de jeito nenhum, vê se tem alguma linha vazia/genérica para usar
-                 const cadastroGenerico = cadastrosDoRamal.find(m => !m.servico_permitido || String(m.servico_permitido).trim() === '');
-                 if (cadastroGenerico) {
-                     somaPesSelecionados += converterParaNumero(cadastroGenerico.total_pes);
-                 } else {
-                     // 4º Último caso: pega o total da primeira linha que aparecer
-                     somaPesSelecionados += converterParaNumero(cadastrosDoRamal[0].total_pes);
-                 }
-             }
-         }
-     }
-  });
-  
-  const limitePesCalculado = somaPesSelecionados > 0 ? somaPesSelecionados : null;
+    const mapaServicos = new Map<string, number>();
+    cadastrosSelecionados.forEach(cad => {
+        const nomeSrv = cad.servico_permitido ? String(cad.servico_permitido).trim() : 'Livre';
+        const pes = converterParaNumero(cad.total_pes);
+        mapaServicos.set(nomeSrv, (mapaServicos.get(nomeSrv) || 0) + pes);
+    });
+
+    mapaServicos.forEach((total, srv) => {
+        capacidadesDisponiveis.push({ servico: srv, total });
+    });
+
+    // Filtro inteligente que impede ESTRIA NORMAL de pegar o limite de ESTRIA EM V
+    const servicoFormatado = String(servico).trim().toUpperCase();
+    let matchedTotal = 0;
+    
+    for (let cap of capacidadesDisponiveis) {
+        if (cap.servico.toUpperCase() === servicoFormatado) {
+            matchedTotal = cap.total;
+            break;
+        }
+    }
+    
+    if (matchedTotal === 0) {
+        let maiorPontuacao = -1;
+        for (let cap of capacidadesDisponiveis) {
+            if (cap.servico !== 'Livre') {
+                const score = calcularSimilaridade(servicoFormatado, cap.servico);
+                if (score > maiorPontuacao && score > 0) {
+                    maiorPontuacao = score;
+                    matchedTotal = cap.total;
+                }
+            }
+        }
+    }
+    
+    if (matchedTotal === 0) {
+        const livre = capacidadesDisponiveis.find(c => c.servico === 'Livre');
+        if (livre) matchedTotal = livre.total;
+        else if (capacidadesDisponiveis.length > 0) matchedTotal = capacidadesDisponiveis[0].total;
+    }
+
+    limitePesCalculado = matchedTotal > 0 ? matchedTotal : null;
+  }
 
   const toggleRamal = (ramalStr: string) => {
     if (permiteMultiplosRamais) {
@@ -337,7 +435,7 @@ export default function HomeScreen() {
           fiscal_nome: fiscalRealDaEquipe
         }]).then().catch(() => { console.log('Alerta bloqueado pela falta de rede'); }); 
       }
-      Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");
+      Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite deste serviço no(s) ramal(is) selecionado(s).");
       setQuantidade(''); 
     } else {
       setQuantidade(texto);
@@ -397,26 +495,28 @@ export default function HomeScreen() {
 
     if (!isCarregamentoResina) {
       if (!quadra || ramaisSelecionados.length === 0) {
-        return Alert.alert("Aviso", "Preencha a Quadra e o Ramal!");
+        return Alert.alert("Aviso", "Preencha a Quadra e Selecione ao menos 1 Ramal!");
       }
       
       const dataMomento = new Date();
-      for (let r of ramaisSelecionados) {
-        const ramalInfo = mapaCompleto.find(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === r);
-        if (!ramalInfo) {
-          return Alert.alert("❌ Erro", `O ramal ${r} não foi encontrado no mapa desta fazenda e quadra.`);
+      for (let rStr of ramaisSelecionados) {
+        const ramalRows = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === rStr);
+        if (ramalRows.length === 0) {
+          return Alert.alert("❌ Erro", `Dados do ramal ${rStr} não encontrados.`);
         }
-        if (ramalInfo.data_bloqueio) {
-          const hojeISO = dataMomento.toISOString().split('T')[0];
-          if (hojeISO !== ramalInfo.data_bloqueio) { 
-            return Alert.alert("📅 Data Bloqueada", `Ramal ${r} permitido apenas em: ${new Date(ramalInfo.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
+        for (let row of ramalRows) {
+          if (row.data_bloqueio) {
+            const hojeISO = dataMomento.toISOString().split('T')[0];
+            if (hojeISO !== row.data_bloqueio) { 
+              return Alert.alert("📅 Data Bloqueada", `Ramal ${row.ramal} tem restrição e só pode ser lançado em: ${new Date(row.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
+            }
           }
         }
       }
 
       if (limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
           setQuantidade('');
-          return Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");
+          return Alert.alert("⚠️ Limite Excedido", "A quantidade informada ultrapassa o limite.");
       }
     }
     
@@ -633,9 +733,16 @@ export default function HomeScreen() {
 
                 <Text style={styles.label}>Serviço Feito:</Text>
                 <View style={styles.pickerContainer}>
-                  <Picker selectedValue={servico} onValueChange={(v) => { setServico(v); setServicoSelecionadoCompleto(listaServicos.find(s => s.nome === v)); }} style={styles.picker}>
-                    <Picker.Item label="Selecione o Serviço..." value="" />
-                    {listaServicos.map((item) => (<Picker.Item key={item.id} label={item.nome} value={item.nome} />))}
+                  <Picker 
+                    selectedValue={servico} 
+                    onValueChange={(v) => { 
+                      setServico(v); 
+                      setServicoSelecionadoCompleto(servicosFiltrados.find(s => s.nome === v)); 
+                    }} 
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={fazenda ? "Selecione o Serviço..." : "Selecione a fazenda primeiro..."} value="" />
+                    {servicosFiltrados.map((item) => (<Picker.Item key={item.id} label={item.nome} value={item.nome} />))}
                   </Picker>
                 </View>
 
@@ -654,7 +761,7 @@ export default function HomeScreen() {
 
                 {!isCarregamentoResina && (
                   <>
-                    <Text style={styles.label}>Ramal:</Text>
+                    <Text style={styles.label}>Qual a Estrutura Feita? (Toque para selecionar):</Text>
                     {!quadra ? (
                       <Text style={styles.textoDica}>Selecione a quadra primeiro para carregar os ramais.</Text>
                     ) : (
@@ -667,6 +774,7 @@ export default function HomeScreen() {
                           </View>
                         )}
                         
+                        {/* 🟢 BOTÕES APENAS COM NÚMERO E FORMATO COMPACTO */}
                         <View style={styles.chipsContainer}>
                           {ramaisDisponiveis.map((r, i) => {
                             const rStr = String(r.ramal);
@@ -674,24 +782,35 @@ export default function HomeScreen() {
                             return (
                               <TouchableOpacity 
                                 key={i} 
-                                style={[styles.chip, selecionado && styles.chipSelecionado]} 
+                                style={[styles.chipNumber, selecionado && styles.chipNumberSelecionado]} 
                                 onPress={() => toggleRamal(rStr)}
                               >
-                                <Text style={[styles.chipText, selecionado && styles.chipTextSelecionado]}>{rStr}</Text>
+                                <Text style={[styles.chipNumberText, selecionado && styles.chipNumberTextSelecionado]}>{rStr}</Text>
                               </TouchableOpacity>
                             );
                           })}
                         </View>
 
-                        {somaPesSelecionados > 0 && (
-                          <TouchableOpacity 
-                            style={styles.dicaPreenchimento} 
-                            onPress={() => handleMudancaQuantidade(String(somaPesSelecionados))}
-                          >
-                            <Text style={styles.textoDicaPreenchimento}>
-                              💡 Total do(s) ramal(is): <Text style={{fontWeight: 'bold'}}>{somaPesSelecionados} pés</Text>. Toque para preencher.
-                            </Text>
-                          </TouchableOpacity>
+                        {/* 🟢 CAIXA AZUL COM OPÇÕES CLICÁVEIS */}
+                        {ramaisSelecionados.length > 0 && capacidadesDisponiveis.length > 0 && (
+                          <View style={styles.dicaContainer}>
+                            <Text style={styles.dicaTitulo}>💡 Toque na opção para preencher:</Text>
+                            {capacidadesDisponiveis.map((cap, idx) => (
+                              <TouchableOpacity 
+                                key={idx} 
+                                style={styles.dicaBotao} 
+                                onPress={() => handleMudancaQuantidade(String(cap.total))}
+                              >
+                                <View style={styles.dicaRow}>
+                                    <Ionicons name="add-circle" size={24} color="#3498DB" />
+                                    <View style={styles.dicaInfo}>
+                                        <Text style={styles.dicaBotaoTotal}>{cap.total} pés</Text>
+                                        <Text style={styles.dicaBotaoServico}>{cap.servico}</Text>
+                                    </View>
+                                </View>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
                         )}
                       </View>
                     )}
@@ -830,17 +949,25 @@ const styles = StyleSheet.create({
   
   disabled: { backgroundColor: '#EAECEE', opacity: 0.6 },
   
+  // 🟢 ESTILO DOS CHIPS MINIMALISTAS (APENAS NÚMEROS)
   chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5, marginBottom: 10 },
-  chip: { backgroundColor: '#F8FAFC', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 8, borderWidth: 1, borderColor: '#D5DBDB' },
-  chipSelecionado: { backgroundColor: '#2980B9', borderColor: '#2980B9' },
-  chipText: { color: '#34495E', fontWeight: 'bold', fontSize: 16 },
-  chipTextSelecionado: { color: '#FFF' },
+  chipNumber: { backgroundColor: '#F8FAFC', minWidth: 45, paddingHorizontal: 12, height: 45, borderRadius: 8, borderWidth: 1, borderColor: '#D5DBDB', justifyContent: 'center', alignItems: 'center' },
+  chipNumberSelecionado: { backgroundColor: '#2980B9', borderColor: '#2980B9' },
+  chipNumberText: { color: '#34495E', fontWeight: 'bold', fontSize: 16 },
+  chipNumberTextSelecionado: { color: '#FFF' },
+  
   btnSelecionarTodos: { backgroundColor: '#27AE60', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
   btnSelecionarTodosText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
   textoDica: { color: '#7F8C8D', fontSize: 13, fontStyle: 'italic', marginTop: 5 },
   
-  dicaPreenchimento: { backgroundColor: '#EBF5FB', padding: 10, borderRadius: 8, marginTop: 2, marginBottom: 15, borderWidth: 1, borderColor: '#AED6F1', alignItems: 'center' },
-  textoDicaPreenchimento: { color: '#2980B9', fontSize: 12, fontStyle: 'italic' },
+  // 🟢 ESTILO DA NOVA CAIXA AZUL CLICÁVEL
+  dicaContainer: { backgroundColor: '#EBF5FB', padding: 12, borderRadius: 8, marginTop: 5, marginBottom: 15, borderWidth: 1, borderColor: '#AED6F1' },
+  dicaTitulo: { color: '#2980B9', fontSize: 13, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
+  dicaBotao: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#3498DB', borderRadius: 8, padding: 12, marginBottom: 8 },
+  dicaRow: { flexDirection: 'row', alignItems: 'center' },
+  dicaInfo: { marginLeft: 10, flex: 1 },
+  dicaBotaoTotal: { fontSize: 16, fontWeight: 'bold', color: '#2C3E50' },
+  dicaBotaoServico: { fontSize: 12, color: '#7F8C8D', marginTop: 2 },
 
   inputQuantidade: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 18, backgroundColor: '#F8FAFC', height: 50 },
   disabledInput: { backgroundColor: '#EAECEE' },

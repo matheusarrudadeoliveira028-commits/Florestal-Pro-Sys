@@ -24,6 +24,12 @@ const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () 
   }
 };
 
+// 🟢 FUNÇÃO INTELIGENTE DE FILTRO
+const normalizarTexto = (txt: string) => {
+  if (!txt) return '';
+  return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+};
+
 // =========================================================================
 // COMPONENTES MEMOIZADOS (Ultra leves)
 // =========================================================================
@@ -85,17 +91,15 @@ export default function CadastrosScreen() {
     if (data) setListaSetores(data);
   };
 
-  // 🟢 BUSCA TODOS OS MAPAS SEM LIMITE (O SEGREDO DA PERFORMANCE ESTÁ NA RENDERIZAÇÃO, NÃO NA MEMÓRIA)
   const carregarMapas = async () => {
     const { data: todosMapas } = await supabase
       .from('mapa_fazendas')
       .select('*')
-      .limit(10000); // Traz todos os dados de forma leve
+      .limit(10000);
 
     if (todosMapas) {
       setListaMapas(todosMapas);
       
-      // Gera as fazendas únicas para os Selects/Pickers
       const unicas = [...new Set(todosMapas.map(item => item.fazenda).filter(Boolean))] as string[];
       setFazendasUnicas(unicas.sort());
     }
@@ -112,6 +116,7 @@ export default function CadastrosScreen() {
   const [tipoCobranca, setTipoCobranca] = useState('milheiro');
   const [isCoringa, setIsCoringa] = useState('nao'); 
   const [permiteMultiplos, setPermiteMultiplos] = useState('nao'); 
+  const [fazendasServico, setFazendasServico] = useState<string[]>([]); // 🟢 ESTADO PARA FAZENDAS PERMITIDAS
   const [editandoServicoId, setEditandoServicoId] = useState<number | null>(null);
 
   // === ESTADOS: MAPA FORMULÁRIO ===
@@ -127,11 +132,9 @@ export default function CadastrosScreen() {
   const [nomeSetor, setNomeSetor] = useState('');
   const [editandoSetorId, setEditandoSetorId] = useState<number | null>(null);
 
-  // 🟢 NOVOS ESTADOS: FILTROS DE VISUALIZAÇÃO DO MAPA 🟢
   const [filtroFazenda, setFiltroFazenda] = useState('');
   const [filtroQuadra, setFiltroQuadra] = useState('');
 
-  // 🟢 LÓGICA DE AGRUPAMENTO E ORDENAÇÃO INSTANTÂNEA 🟢
   const quadrasFiltradas = useMemo(() => {
     if (!filtroFazenda) return [];
     const quadras = listaMapas.filter(m => m.fazenda === filtroFazenda).map(m => m.quadra);
@@ -142,9 +145,8 @@ export default function CadastrosScreen() {
     if (!filtroFazenda || !filtroQuadra) return [];
     return listaMapas
       .filter(m => m.fazenda === filtroFazenda && m.quadra === filtroQuadra)
-      .sort((a, b) => (parseInt(a.ramal) || 0) - (parseInt(b.ramal) || 0)); // Ordem numérica perfeita
+      .sort((a, b) => (parseInt(a.ramal) || 0) - (parseInt(b.ramal) || 0));
   }, [filtroFazenda, filtroQuadra, listaMapas]);
-
 
   const aplicarMascaraData = (texto: string) => {
     let v = texto.replace(/\D/g, ''); 
@@ -184,6 +186,15 @@ export default function CadastrosScreen() {
     }
   };
 
+  // 🟢 FUNÇÃO DE SELEÇÃO DE FAZENDAS NO SERVIÇO
+  const toggleFazendaServico = (fazenda: string) => {
+    if (fazendasServico.includes(fazenda)) {
+      setFazendasServico(fazendasServico.filter(f => f !== fazenda));
+    } else {
+      setFazendasServico([...fazendasServico, fazenda]);
+    }
+  };
+
   const salvarServico = async () => {
     if (!nomeServico || !precoServico) return alertaWebMobile('Erro', 'Preencha nome e preço.');
     setSalvando(true);
@@ -192,12 +203,18 @@ export default function CadastrosScreen() {
     const coringaBool = isCoringa === 'sim'; 
     const multiplosBool = permiteMultiplos === 'sim'; 
     
+    // Converte as fazendas selecionadas em string separada por vírgula (ou null se vazio)
+    const fazendasPermitidasFormatadas = fazendasServico.length > 0 
+      ? fazendasServico.map(f => f.toUpperCase()).join(', ') 
+      : null;
+
     const payload = { 
       nome: nomeServico, 
       preco_base: precoFormatado, 
       tipo_cobranca: tipoCobranca,
       is_coringa: coringaBool,
-      permite_multiplos: multiplosBool 
+      permite_multiplos: multiplosBool,
+      fazendas_permitidas: fazendasPermitidasFormatadas // 🟢 NOVO CAMPO
     };
 
     let error;
@@ -305,10 +322,20 @@ export default function CadastrosScreen() {
     setIsCoringa(item.is_coringa ? 'sim' : 'nao');
     setPermiteMultiplos(item.permite_multiplos ? 'sim' : 'nao');
     setEditandoServicoId(item.id);
+
+    // 🟢 LÊ AS FAZENDAS E SETA NO ESTADO
+    if (item.fazendas_permitidas) {
+      const arrayFazendas = item.fazendas_permitidas.split(',').map((f: string) => f.trim().toUpperCase());
+      setFazendasServico(arrayFazendas);
+    } else {
+      setFazendasServico([]);
+    }
+
+    if (Platform.OS === 'web') window.scrollTo(0, 0);
   };
 
   const cancelarEdicaoServico = () => {
-    setNomeServico(''); setPrecoServico(''); setTipoCobranca('milheiro'); setIsCoringa('nao'); setPermiteMultiplos('nao'); setEditandoServicoId(null);
+    setNomeServico(''); setPrecoServico(''); setTipoCobranca('milheiro'); setIsCoringa('nao'); setPermiteMultiplos('nao'); setFazendasServico([]); setEditandoServicoId(null);
   };
 
   const iniciarEdicaoMapa = useCallback((item: any) => {
@@ -320,7 +347,6 @@ export default function CadastrosScreen() {
     setServicoVinculado(item.servico_permitido || '');
     setEditandoMapaId(item.id);
     
-    // Rola para o topo para mostrar o formulário
     if (Platform.OS === 'web') window.scrollTo(0, 0);
   }, []);
 
@@ -358,7 +384,6 @@ export default function CadastrosScreen() {
     });
   }, []);
 
-  // 🟢 NOVO CABEÇALHO DA LISTA (AGORA CONTÉM OS FILTROS)
   const renderFormularioMapa = () => (
     <View style={{ marginBottom: 10 }}>
       <Text style={styles.formTitle}>{editandoMapaId ? '✏️ Editando Ramal' : 'Mapear Novo Ramal'}</Text>
@@ -422,7 +447,6 @@ export default function CadastrosScreen() {
         </TouchableOpacity>
       )}
 
-      {/* 🟢 SEÇÃO DE FILTRO ULTRA LEVE 🟢 */}
       <View style={styles.secaoLista}>
         <Text style={styles.tituloLista}>Gerenciar Estrutura</Text>
         <Text style={{fontSize: 13, color: '#7F8C8D', marginBottom: 15}}>
@@ -546,7 +570,7 @@ export default function CadastrosScreen() {
           )}
 
           {abaAtiva === 'servico' && (
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
               <Text style={styles.formTitle}>{editandoServicoId ? '✏️ Editando Serviço' : 'Novo Serviço'}</Text>
               <Text style={styles.label}>Nome:</Text>
               <TextInput style={styles.input} placeholder="Ex: Roçada" value={nomeServico} onChangeText={setNomeServico}/>
@@ -577,6 +601,29 @@ export default function CadastrosScreen() {
                 </Picker>
               </View>
 
+              {/* 🟢 SELEÇÃO DE FAZENDAS (CHIPS) */}
+              <View style={styles.fazendasContainer}>
+                <Text style={styles.label}>Disponível em quais fazendas?</Text>
+                <Text style={styles.textoDicaFazenda}>Deixe tudo em branco para liberar em TODAS as fazendas.</Text>
+                
+                <View style={styles.chipsContainer}>
+                  {fazendasUnicas.map((fazenda, idx) => {
+                    const selecionado = fazendasServico.includes(fazenda);
+                    return (
+                      <TouchableOpacity 
+                        key={idx} 
+                        style={[styles.chip, selecionado && styles.chipSelecionado]}
+                        onPress={() => toggleFazendaServico(fazenda)}
+                      >
+                        <Text style={[styles.chipText, selecionado && styles.chipTextSelecionado]}>
+                          {fazenda}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
               {editandoServicoId ? (
                 <View style={styles.row}>
                   <TouchableOpacity style={[styles.button, {flex: 1, marginRight: 5, backgroundColor: '#95A5A6'}]} onPress={cancelarEdicaoServico}>
@@ -604,6 +651,9 @@ export default function CadastrosScreen() {
                         R$ {item.preco_base?.toFixed(2)} por {item.tipo_cobranca === 'milheiro' ? '1000 Pés' : 'Unidade'}
                         {item.permite_multiplos ? ' • [Múltiplos Ramais]' : ''}
                       </Text>
+                      <Text style={styles.itemDetalhe}>
+                        🏢 <Text style={{fontWeight: 'bold'}}>{item.fazendas_permitidas ? item.fazendas_permitidas : 'Todas as Fazendas (Livre)'}</Text>
+                      </Text>
                       {item.bloqueado && <Text style={{fontSize: 10, color: '#C0392B', fontWeight: 'bold', marginTop: 2}}>BLOQUEADO PARA FISCAIS</Text>}
                     </View>
                     
@@ -630,7 +680,6 @@ export default function CadastrosScreen() {
               data={ramaisParaRenderizar}
               keyExtractor={(item) => item.id.toString()}
               ListHeaderComponent={renderFormularioMapa()}
-              // ListEmptyComponent garante boa comunicação quando nada é selecionado
               ListEmptyComponent={
                 <View style={{padding: 20, alignItems: 'center'}}>
                   <Text style={{color: '#95A5A6', textAlign: 'center'}}>
@@ -686,5 +735,14 @@ const styles = StyleSheet.create({
   itemNome: { fontSize: 16, fontWeight: 'bold', color: '#2C3E50' },
   itemDetalhe: { fontSize: 13, color: '#7F8C8D', marginTop: 2 },
   iconeAcao: { fontSize: 20 },
-  btnAcao: { padding: 5 }
+  btnAcao: { padding: 5 },
+
+  // 🟢 ESTILOS DOS CHIPS DE FAZENDAS
+  fazendasContainer: { marginTop: 15, padding: 15, backgroundColor: '#F8FAFC', borderRadius: 8, borderWidth: 1, borderColor: '#E0E6ED' },
+  textoDicaFazenda: { fontSize: 12, color: '#95A5A6', marginBottom: 10, fontStyle: 'italic' },
+  chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderColor: '#BDC3C7', backgroundColor: '#FFF' },
+  chipSelecionado: { backgroundColor: '#2980B9', borderColor: '#2980B9' },
+  chipText: { fontSize: 13, color: '#34495E', fontWeight: '600' },
+  chipTextSelecionado: { color: '#FFF' }
 });
