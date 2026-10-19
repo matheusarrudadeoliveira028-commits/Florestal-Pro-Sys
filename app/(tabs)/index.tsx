@@ -38,13 +38,10 @@ const normalizarTexto = (txt: string) => {
   return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
 };
 
-// 🟢 FUNÇÃO INTELIGENTE: Impede confusão entre serviços parecidos (ex: Estria Normal vs Estria em V)
 const calcularSimilaridade = (str1: string, str2: string): number => {
-  // Limpa caracteres especiais e deixa apenas letras e números
   const limpo1 = normalizarTexto(str1).replace(/[^A-Z0-9 ]/g, '');
   const limpo2 = normalizarTexto(str2).replace(/[^A-Z0-9 ]/g, '');
   
-  // Remove o "S" no final das palavras para que "ESTRIA" e "ESTRIAS" sejam considerados iguais
   const palavras1 = limpo1.split(/\s+/).map(p => p.replace(/S$/, ''));
   const palavras2 = limpo2.split(/\s+/).map(p => p.replace(/S$/, ''));
   
@@ -185,7 +182,9 @@ export default function HomeScreen() {
       let { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
       const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
       const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
-      const { data: config, error: errConfig } = await supabase.from('configuracoes').select('*').single();
+      
+      // 🟢 CORREÇÃO DO ERRO 406 AQUI
+      const { data: config, error: errConfig } = await supabase.from('configuracoes').select('*').maybeSingle();
 
       if (errColab || errServ || errMapa) throw new Error("Sem rede");
 
@@ -344,8 +343,13 @@ export default function HomeScreen() {
   const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
   const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
+  
+  // 🟢 FORÇA O RECONHECIMENTO DO CORINGA MESMO SE FOR STRING "sim", "true", etc.
+  const isServicoCoringa = servicoSelecionadoCompleto?.is_coringa === true || 
+                           String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'sim' || 
+                           String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'true' ||
+                           servicoSelecionadoCompleto?.is_coringa === 1;
 
-  // 🟢 LÓGICA REFEITA: Extrai as capacidades e faz correspondência inteligente sem confundir
   let capacidadesDisponiveis: { servico: string, total: number }[] = [];
   let limitePesCalculado: number | null = null;
 
@@ -367,7 +371,6 @@ export default function HomeScreen() {
         capacidadesDisponiveis.push({ servico: srv, total });
     });
 
-    // Filtro inteligente que impede ESTRIA NORMAL de pegar o limite de ESTRIA EM V
     const servicoFormatado = String(servico).trim().toUpperCase();
     let matchedTotal = 0;
     
@@ -422,7 +425,15 @@ export default function HomeScreen() {
     const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
     const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || 'Não Identificado';
 
-    if (!isCarregamentoResina && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
+    // 🟢 LOGS DE DEBUG NO TERMINAL PARA ENTENDERMOS SE FALHAR
+    console.log('--- DEBUG DIGITAÇÃO ---');
+    console.log('Servico Nome:', servico);
+    console.log('Objeto Completo:', servicoSelecionadoCompleto);
+    console.log('É Coringa (TRUE/FALSE)?', isServicoCoringa);
+    console.log('Limite Calculado:', limitePesCalculado);
+    console.log('Valor Digitado:', valorDigitado);
+
+    if (!isCarregamentoResina && !isServicoCoringa && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
       if (!isOffline) {
         supabase.from('alertas_limite').insert([{
           colaborador: colaborador || 'Não Selecionado',
@@ -514,7 +525,11 @@ export default function HomeScreen() {
         }
       }
 
-      if (limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
+      // 🟢 LOGS DE DEBUG NO SALVAR
+      console.log('--- DEBUG SALVAR ---');
+      console.log('É Coringa?', isServicoCoringa);
+      
+      if (!isServicoCoringa && limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
           setQuantidade('');
           return Alert.alert("⚠️ Limite Excedido", "A quantidade informada ultrapassa o limite.");
       }
@@ -774,7 +789,7 @@ export default function HomeScreen() {
                           </View>
                         )}
                         
-                        {/* 🟢 BOTÕES APENAS COM NÚMERO E FORMATO COMPACTO */}
+                        {/* 🟢 BOTÕES APENAS COM NÚMERO */}
                         <View style={styles.chipsContainer}>
                           {ramaisDisponiveis.map((r, i) => {
                             const rStr = String(r.ramal);
@@ -793,16 +808,21 @@ export default function HomeScreen() {
 
                         {/* 🟢 CAIXA AZUL COM OPÇÕES CLICÁVEIS */}
                         {ramaisSelecionados.length > 0 && capacidadesDisponiveis.length > 0 && (
-                          <View style={styles.dicaContainer}>
-                            <Text style={styles.dicaTitulo}>💡 Toque na opção para preencher:</Text>
+                          <View style={[styles.dicaContainer, isServicoCoringa && {borderColor: '#F39C12', backgroundColor: '#FEF9E7'}]}>
+                            {isServicoCoringa ? (
+                              <Text style={[styles.dicaTitulo, {color: '#D35400'}]}>🃏 Serviço Coringa Selecionado (Sem Limite de Pés)</Text>
+                            ) : (
+                              <Text style={styles.dicaTitulo}>💡 Toque na opção para preencher:</Text>
+                            )}
+                            
                             {capacidadesDisponiveis.map((cap, idx) => (
                               <TouchableOpacity 
                                 key={idx} 
-                                style={styles.dicaBotao} 
+                                style={[styles.dicaBotao, isServicoCoringa && {borderColor: '#F39C12'}]} 
                                 onPress={() => handleMudancaQuantidade(String(cap.total))}
                               >
                                 <View style={styles.dicaRow}>
-                                    <Ionicons name="add-circle" size={24} color="#3498DB" />
+                                    <Ionicons name="add-circle" size={24} color={isServicoCoringa ? "#E67E22" : "#3498DB"} />
                                     <View style={styles.dicaInfo}>
                                         <Text style={styles.dicaBotaoTotal}>{cap.total} pés</Text>
                                         <Text style={styles.dicaBotaoServico}>{cap.servico}</Text>
@@ -949,7 +969,6 @@ const styles = StyleSheet.create({
   
   disabled: { backgroundColor: '#EAECEE', opacity: 0.6 },
   
-  // 🟢 ESTILO DOS CHIPS MINIMALISTAS (APENAS NÚMEROS)
   chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5, marginBottom: 10 },
   chipNumber: { backgroundColor: '#F8FAFC', minWidth: 45, paddingHorizontal: 12, height: 45, borderRadius: 8, borderWidth: 1, borderColor: '#D5DBDB', justifyContent: 'center', alignItems: 'center' },
   chipNumberSelecionado: { backgroundColor: '#2980B9', borderColor: '#2980B9' },
@@ -960,7 +979,6 @@ const styles = StyleSheet.create({
   btnSelecionarTodosText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
   textoDica: { color: '#7F8C8D', fontSize: 13, fontStyle: 'italic', marginTop: 5 },
   
-  // 🟢 ESTILO DA NOVA CAIXA AZUL CLICÁVEL
   dicaContainer: { backgroundColor: '#EBF5FB', padding: 12, borderRadius: 8, marginTop: 5, marginBottom: 15, borderWidth: 1, borderColor: '#AED6F1' },
   dicaTitulo: { color: '#2980B9', fontSize: 13, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
   dicaBotao: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#3498DB', borderRadius: 8, padding: 12, marginBottom: 8 },
