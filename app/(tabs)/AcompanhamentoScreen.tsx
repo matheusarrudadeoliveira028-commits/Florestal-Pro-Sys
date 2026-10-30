@@ -136,18 +136,14 @@ export default function AcompanhamentoScreen() {
   };
 
   const carregarFiscais = async () => {
-    const { data } = await supabase.from('colaboradores').select('fiscal_id, fiscal_vinculado').limit(5000);
-    if (data) {
-      const mapa = new Map();
-      data.forEach(item => {
-        if (item.fiscal_id && item.fiscal_vinculado) {
-          mapa.set(item.fiscal_id, item.fiscal_vinculado);
-        }
-      });
-      
-      const unicos = Array.from(mapa, ([id, nome]) => ({ id, nome }));
-      unicos.sort((a, b) => a.nome.localeCompare(b.nome));
-      setListaFiscais(unicos);
+    const { data, error } = await supabase
+      .from('perfis')
+      .select('id, nome')
+      .eq('cargo', 'Fiscal de Campo')
+      .order('nome');
+
+    if (data && !error) {
+      setListaFiscais(data);
     }
   };
 
@@ -196,7 +192,6 @@ export default function AcompanhamentoScreen() {
 
     setCarregando(true);
     try {
-      // 🟢 BUSCA O VALOR DO ATESTADO SALVO NA MEMÓRIA DO CELULAR
       let valorAtestadoNum = 0;
       try {
         const valSalvo = await AsyncStorage.getItem('@valor_atestado');
@@ -205,10 +200,8 @@ export default function AcompanhamentoScreen() {
         }
       } catch (e) {}
 
-      // 🟢 PEGA O DIA DA DATA SELECIONADA PARA SABER SE É PRIMEIRA QUINZENA
       const diaMesNum = parseInt(dataSelecionada.split('/')[0], 10);
 
-      // DEFINE QUEM É O FISCAL COM BASE NO PERFIL
       let fiscalNomeQuery = '';
       let fiscalIdQuery = 'TODOS';
 
@@ -240,7 +233,7 @@ export default function AcompanhamentoScreen() {
 
       let data = [...(dataDia || [])];
 
-      // 🟢 1.1. RESGATE DE ATESTADOS E AUSÊNCIAS EM ATÉ 180 DIAS
+      // 1.1. RESGATE DE ATESTADOS E AUSÊNCIAS EM ATÉ 180 DIAS
       try {
         const pData = dataBD.split('-');
         const dtAntiga = new Date(parseInt(pData[0], 10), parseInt(pData[1], 10) - 1, parseInt(pData[2], 10));
@@ -340,7 +333,6 @@ export default function AcompanhamentoScreen() {
           let vTot = Number(item.valor_total) || 0;
           let qtd = Number(item.quantidade) || 0;
 
-          // 🟢 INJEÇÃO DO VALOR DO ATESTADO SE FOR NA PRIMEIRA QUINZENA!
           if (isAtestado && diaMesNum <= 15) {
             vUnit = valorAtestadoNum;
             vTot = valorAtestadoNum;
@@ -384,10 +376,10 @@ export default function AcompanhamentoScreen() {
         setTotalValor(sumValor);
 
         const hierarquia = data.reduce((acc: any, item: any) => {
-          const s = item.servico || '-';
-          const f = item.fazenda || '-';
-          const q = item.quadra || '-';
-          const r = item.ramal || '-';
+          const s = item.servico ? String(item.servico).trim().toUpperCase().replace(/\s+/g, ' ') : '-';
+          const f = item.fazenda ? String(item.fazenda).trim().toUpperCase().replace(/\s+/g, ' ') : '-';
+          const q = item.quadra ? String(item.quadra).trim().toUpperCase() : '-';
+          const r = item.ramal ? String(item.ramal).trim().toUpperCase() : '-';
           const qtd = Number(item.quantidade) || 0;
 
           if (!acc[s]) acc[s] = { total: 0, fazendas: {} };
@@ -490,7 +482,9 @@ export default function AcompanhamentoScreen() {
       registros.forEach((item: any) => {
         const valorUni = item.valor_unitario ? Number(item.valor_unitario).toFixed(4).replace('.', ',') : '0,00';
         const valorTot = item.valor_total ? Number(item.valor_total).toFixed(2).replace('.', ',') : '0,00';
-        linhasTabela += `<tr><td style="text-align: left; font-weight: bold;">${item.colaborador}</td><td style="text-align: left;">${item.servico || '-'}</td><td>${item.quadra || '-'}</td><td>${item.ramal || '-'}</td><td><strong>${item.quantidade || '0'}</strong></td><td>R$ ${valorUni}</td><td style="color: #27AE60;"><strong>R$ ${valorTot}</strong></td></tr>`;
+        
+        // 🟢 PDF COM COLUNA DE FAZENDA (Tamanhos ajustados)
+        linhasTabela += `<tr><td style="text-align: left; font-weight: bold;">${item.colaborador}</td><td style="text-align: left;">${item.fazenda || '-'}</td><td style="text-align: left;">${item.servico || '-'}</td><td>${item.quadra || '-'}</td><td>${item.ramal || '-'}</td><td><strong>${item.quantidade || '0'}</strong></td><td>R$ ${valorUni}</td><td style="color: #27AE60;"><strong>R$ ${valorTot}</strong></td></tr>`;
       });
 
       const htmlCompleto = `
@@ -547,7 +541,7 @@ export default function AcompanhamentoScreen() {
 
             <table>
               <thead>
-                <tr><th style="width: 25%; text-align: left;">Funcionário</th><th style="width: 25%; text-align: left;">Serviço</th><th style="width: 10%;">Quadra</th><th style="width: 10%;">Ramal</th><th style="width: 10%;">Qtd</th><th style="width: 10%;">V. Unit</th><th style="width: 10%;">Total</th></tr>
+                <tr><th style="width: 20%; text-align: left;">Funcionário</th><th style="width: 20%; text-align: left;">Fazenda</th><th style="width: 20%; text-align: left;">Serviço</th><th style="width: 8%;">Quadra</th><th style="width: 8%;">Ramal</th><th style="width: 8%;">Qtd</th><th style="width: 8%;">V. Unit</th><th style="width: 8%;">Total</th></tr>
               </thead>
               <tbody>${linhasTabela}</tbody>
             </table>
@@ -754,7 +748,7 @@ export default function AcompanhamentoScreen() {
                                     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
                                     .map((ramal) => (
                                       <View key={ramal} style={styles.linhaRamal}>
-                                        <Text style={styles.txtRamalTitulo}>• Ramal {ramal}</Text>
+                                        <Text style={styles.txtRamalTitulo}>Ramal {ramal}</Text>
                                         <Text style={styles.txtRamalTotal}>{resumoHierarquico[servico].fazendas[fazenda].quadras[quadra].ramais[ramal]} un</Text>
                                       </View>
                                     ))}
@@ -805,37 +799,44 @@ export default function AcompanhamentoScreen() {
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ flexGrow: 0 }}>
               <View style={{ minWidth: '100%' }}>
+                
+                {/* 🟢 CABEÇALHO DA TABELA ATUALIZADO */}
                 <View style={styles.tableHeader}>
-                  <Text style={[styles.th, { width: 150 }]}>Funcionário</Text>
-                  <Text style={[styles.th, { width: 140 }]}>Serviço</Text>
-                  <Text style={[styles.th, { width: 80, textAlign: 'center' }]}>Quadra</Text>
-                  <Text style={[styles.th, { width: 100, textAlign: 'center' }]}>Ramal</Text>
+                  <Text style={[styles.th, { width: 140 }]}>Funcionário</Text>
+                  <Text style={[styles.th, { width: 140 }]}>Fazenda</Text>
+                  <Text style={[styles.th, { width: 130 }]}>Serviço</Text>
+                  <Text style={[styles.th, { width: 70, textAlign: 'center' }]}>Quadra</Text>
+                  <Text style={[styles.th, { width: 90, textAlign: 'center' }]}>Ramal</Text>
                   <Text style={[styles.th, { width: 70, textAlign: 'center' }]}>Qtd</Text>
-                  <Text style={[styles.th, { width: 90, textAlign: 'right' }]}>Valor Unit.</Text>
-                  <Text style={[styles.th, { width: 90, textAlign: 'right' }]}>Total</Text>
+                  <Text style={[styles.th, { width: 85, textAlign: 'right' }]}>Valor Unit.</Text>
+                  <Text style={[styles.th, { width: 85, textAlign: 'right' }]}>Total</Text>
                 </View>
 
+                {/* 🟢 LINHAS DA TABELA ATUALIZADAS */}
                 {registros.map((item, index) => (
                   <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-                    <Text style={[styles.td, { width: 150, fontWeight: 'bold' }]} numberOfLines={1}>
+                    <Text style={[styles.td, { width: 140, fontWeight: 'bold' }]} numberOfLines={1}>
                       {item.colaborador}
                     </Text>
                     <Text style={[styles.td, { width: 140 }]} numberOfLines={1}>
+                      {item.fazenda || '-'}
+                    </Text>
+                    <Text style={[styles.td, { width: 130 }]} numberOfLines={1}>
                       {item.servico || '-'}
                     </Text>
-                    <Text style={[styles.td, { width: 80, textAlign: 'center' }]}>
+                    <Text style={[styles.td, { width: 70, textAlign: 'center' }]}>
                       {item.quadra || '-'}
                     </Text>
-                    <Text style={[styles.td, { width: 100, textAlign: 'center' }]}>
+                    <Text style={[styles.td, { width: 90, textAlign: 'center' }]}>
                       {item.ramal || '-'}
                     </Text>
                     <Text style={[styles.td, { width: 70, textAlign: 'center', fontWeight: 'bold' }]}>
                       {item.quantidade || '0'}
                     </Text>
-                    <Text style={[styles.td, { width: 90, textAlign: 'right' }]}>
+                    <Text style={[styles.td, { width: 85, textAlign: 'right' }]}>
                       R$ {item.valor_unitario ? Number(item.valor_unitario).toFixed(4).replace('.', ',') : '0,00'}
                     </Text>
-                    <Text style={[styles.td, { width: 90, textAlign: 'right', color: '#27AE60', fontWeight: 'bold' }]}>
+                    <Text style={[styles.td, { width: 85, textAlign: 'right', color: '#27AE60', fontWeight: 'bold' }]}>
                       R$ {item.valor_total ? Number(item.valor_total).toFixed(2).replace('.', ',') : '0,00'}
                     </Text>
                   </View>
@@ -917,5 +918,5 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: 'row', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#ECF0F1' },
   rowEven: { backgroundColor: '#FDFEFE' },
   rowOdd: { backgroundColor: '#F4F6F6' },
-  td: { fontSize: 13, color: '#2C3E50', paddingHorizontal: 10 },
+  td: { fontSize: 12, color: '#2C3E50', paddingHorizontal: 10 },
 });
