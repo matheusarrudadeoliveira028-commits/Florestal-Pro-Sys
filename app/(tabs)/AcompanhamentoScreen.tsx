@@ -186,6 +186,12 @@ export default function AcompanhamentoScreen() {
            s.includes('LICENÇA');
   };
 
+  const verificarSeDemissao = (servicoNome: string) => {
+    if (!servicoNome) return false;
+    const s = servicoNome.toUpperCase();
+    return s.includes('DEMITID') || s.includes('DEMISS') || s.includes('DESLIGAD') || s.includes('RESCIS');
+  };
+
   const buscarProducaoDoDia = async () => {
     const dataBD = converterDataParaBanco(dataSelecionada);
     if (!dataBD) return;
@@ -232,6 +238,13 @@ export default function AcompanhamentoScreen() {
       if (error) throw error;
 
       let data = [...(dataDia || [])];
+      const demitidosNoDiario = new Set<string>();
+
+      data.forEach((d: any) => {
+        if (verificarSeDemissao(d.servico) && d.colaborador) {
+          demitidosNoDiario.add(String(d.colaborador).trim().toUpperCase());
+        }
+      });
 
       // 1.1. RESGATE DE ATESTADOS E AUSÊNCIAS EM ATÉ 180 DIAS
       try {
@@ -245,7 +258,7 @@ export default function AcompanhamentoScreen() {
           .select('*')
           .gte('data', `${dataBuscaAntigaBD} 00:00:00`)
           .lt('data', `${dataBD} 00:00:00`)
-          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%');
+          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%,servico.ilike.%DEMITID%,servico.ilike.%DEMISS%,servico.ilike.%DESLIGAD%');
 
         if (fiscalIdQuery !== 'TODOS') {
           queryAusencias = queryAusencias.eq('fiscal_nome', fiscalNomeQuery);
@@ -254,6 +267,12 @@ export default function AcompanhamentoScreen() {
         const { data: ausenciasData } = await queryAusencias;
 
         if (ausenciasData && ausenciasData.length > 0) {
+          ausenciasData.forEach((r: any) => {
+            if (verificarSeDemissao(r.servico) && r.colaborador) {
+              demitidosNoDiario.add(String(r.colaborador).trim().toUpperCase());
+            }
+          });
+
           const ausenciasVigentesHoje = ausenciasData.filter((r: any) => {
             if (!verificarSeAusencia(r.servico)) return false;
 
@@ -272,8 +291,11 @@ export default function AcompanhamentoScreen() {
           });
 
           ausenciasVigentesHoje.forEach((aus: any) => {
+            const nomeAus = String(aus.colaborador || '').trim().toUpperCase();
+            if (demitidosNoDiario.has(nomeAus)) return;
+
             const jaRegistradoHoje = data.some(
-              (d: any) => String(d.colaborador || '').trim().toUpperCase() === String(aus.colaborador || '').trim().toUpperCase()
+              (d: any) => String(d.colaborador || '').trim().toUpperCase() === nomeAus
             );
             if (!jaRegistradoHoje) {
               data.push(aus);
@@ -284,12 +306,43 @@ export default function AcompanhamentoScreen() {
         console.warn('Aviso: Falha ao buscar ausências antigas:', errAusencia);
       }
 
-      // 2. BUSCA O TAMANHO DA EQUIPE VINCULADA
-      let queryEquipe = supabase.from('colaboradores').select('nome');
+      // 2. BUSCA O TAMANHO DA EQUIPE VINCULADA (FILTRANDO DEMITIDOS E INATIVOS)
+      let queryEquipe = supabase.from('colaboradores').select('*');
       if (fiscalIdQuery !== 'TODOS') {
         queryEquipe = queryEquipe.eq('fiscal_id', fiscalIdQuery);
       }
-      const { data: equipeData } = await queryEquipe;
+      const { data: equipeDataBruta } = await queryEquipe;
+
+      const equipeData = (equipeDataBruta || []).filter((e: any) => {
+        const nomeColab = String(e.nome || '').trim().toUpperCase();
+        if (!nomeColab || demitidosNoDiario.has(nomeColab)) return false;
+
+        if (e.ativo === false || String(e.ativo).toLowerCase() === 'false' || String(e.ativo).toLowerCase() === 'não' || String(e.ativo).toLowerCase() === 'nao' || e.ativo === 0) return false;
+        if (e.demitido === true || String(e.demitido).toLowerCase() === 'true' || String(e.demitido).toLowerCase() === 'sim' || e.demitido === 1) return false;
+        if (e.inativo === true || String(e.inativo).toLowerCase() === 'true' || String(e.inativo).toLowerCase() === 'sim' || e.inativo === 1) return false;
+        if (e.bloqueado === true || String(e.bloqueado).toLowerCase() === 'true' || String(e.bloqueado).toLowerCase() === 'sim' || e.bloqueado === 1) return false;
+
+        const statusTxt = `${e.status || ''} ${e.situacao || ''} ${e.condicao || ''} ${e.motivo || ''}`.toUpperCase();
+        if (
+          statusTxt.includes('DEMITID') ||
+          statusTxt.includes('DEMISS') ||
+          statusTxt.includes('INATIV') ||
+          statusTxt.includes('DESLIGAD') ||
+          statusTxt.includes('RESCIS') ||
+          statusTxt.includes('BLOQUEAD') ||
+          statusTxt.includes('EXCLUID')
+        ) {
+          return false;
+        }
+
+        const dtDemissaoRaw = e.data_demissao || e.data_desligamento || e.data_rescisao || e.data_saida || e.demissao;
+        if (dtDemissaoRaw) {
+          const dtDemissao = padronizarDataDoBanco(String(dtDemissaoRaw));
+          if (dtDemissao && dtDemissao <= dataBD) return false;
+        }
+
+        return true;
+      });
 
       // =========================================================
       // MATEMÁTICA DE FALTA AUTOMÁTICA E MAPEAMENTO DOS NOMES
@@ -303,6 +356,8 @@ export default function AcompanhamentoScreen() {
       if (data) {
         data.forEach(d => {
           const srv = String(d.servico || '').toUpperCase();
+          if (verificarSeDemissao(srv)) return;
+
           if (verificarSeAusencia(srv)) {
             if (d.colaborador) atestadosUnicos.add(String(d.colaborador).trim().toUpperCase());
           } else {

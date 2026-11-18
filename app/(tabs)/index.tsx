@@ -33,9 +33,56 @@ const converterParaNumero = (valor: any): number => {
   return isNaN(numeroParsed) ? 0 : numeroParsed;
 };
 
-const normalizarTexto = (txt: string) => {
+const arredondarMoeda = (valor: number): number => {
+  return Math.round((valor + Number.EPSILON) * 100) / 100;
+};
+
+const normalizarTexto = (txt: any) => {
   if (!txt) return '';
-  return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+  return String(txt).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, ' ').trim();
+};
+
+const limparTextoExibicao = (txt: any) => {
+  if (!txt) return '';
+  return String(txt).replace(/\s+/g, ' ').trim();
+};
+
+// 🟢 DATA LOCAL DO BRASIL (Evita pular para o dia seguinte após as 21h por causa do fuso UTC)
+const obterDataHojeLocalISO = (d: Date = new Date()) => {
+  const ano = d.getFullYear();
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const dia = String(d.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+};
+
+// 🟢 BUSCA PAGINADA COMPLETA (Burla o limite de 1.000 linhas do Supabase)
+const buscarTodasAsLinhas = async (tabela: string, colunaOrdem: string = 'id') => {
+  let todosOsDados: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from(tabela)
+      .select('*')
+      .order(colunaOrdem, { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todosOsDados = [...todosOsDados, ...data];
+      if (data.length < limite) {
+        buscando = false;
+      } else {
+        inicio += limite;
+      }
+    } else {
+      buscando = false;
+    }
+  }
+  return todosOsDados;
 };
 
 const calcularSimilaridade = (str1: string, str2: string): number => {
@@ -62,7 +109,9 @@ const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
 
   return (
     <View style={styles.relogioBox}>
-      <Text style={styles.relogioTexto}>{horaAtual.toLocaleDateString('pt-BR')} - {horaAtual.toLocaleTimeString('pt-BR')}</Text>
+      <Text style={styles.relogioTexto}>
+        {horaAtual.toLocaleDateString('pt-BR')} - {horaAtual.toLocaleTimeString('pt-BR')}
+      </Text>
       <TouchableOpacity onPress={onAtualizar} style={styles.btnAtualizar}>
         <Text style={styles.btnAtualizarText}>🔄 Atualizar Base de Dados</Text>
       </TouchableOpacity>
@@ -123,7 +172,11 @@ export default function HomeScreen() {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
       if (session && !sessionError) {
-        const { data: perfilData, error: perfilError } = await supabase.from('perfis').select('*').eq('id', session.user.id).single();
+        const { data: perfilData, error: perfilError } = await supabase
+          .from('perfis')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
         
         if (perfilData && !perfilError) {
           setPerfilLogado(perfilData);
@@ -162,6 +215,17 @@ export default function HomeScreen() {
     }
   };
 
+  // Higieniza os textos do mapa para evitar que espaços em branco escondam quadras ou ramais
+  const higienizarListaMapa = (lista: any[]) => {
+    return lista.map(item => ({
+      ...item,
+      fazenda: limparTextoExibicao(item.fazenda),
+      quadra: limparTextoExibicao(item.quadra),
+      ramal: limparTextoExibicao(item.ramal),
+      servico_permitido: item.servico_permitido ? limparTextoExibicao(item.servico_permitido) : null
+    }));
+  };
+
   const carregarDadosBase = async (perfilLido: any, userIdLido: string | null) => {
     setCarregandoDados(true);
     try {
@@ -175,28 +239,41 @@ export default function HomeScreen() {
         if (perfilLido.fazendas_permitidas) {
           permitidas = Array.isArray(perfilLido.fazendas_permitidas) 
             ? perfilLido.fazendas_permitidas.map((f: string) => normalizarTexto(f))
-            : perfilLido.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+            : String(perfilLido.fazendas_permitidas).split(',').map((f: string) => normalizarTexto(f));
         }
       }
 
-      let { data: colabs, error: errColab } = await supabase.from('colaboradores').select('*').order('nome');
-      const { data: servs, error: errServ } = await supabase.from('servicos').select('*').neq('bloqueado', true).order('nome');
-      const { data: mapa, error: errMapa } = await supabase.from('mapa_fazendas').select('*');
-      
-      // 🟢 CORREÇÃO DO ERRO 406 AQUI
-      const { data: config, error: errConfig } = await supabase.from('configuracoes').select('*').maybeSingle();
+      const [
+        colabsBrutos,
+        { data: servs, error: errServ },
+        mapaBruto,
+        { data: config }
+      ] = await Promise.all([
+        buscarTodasAsLinhas('colaboradores', 'nome'),
+        supabase.from('servicos').select('*').neq('bloqueado', true).order('nome'),
+        buscarTodasAsLinhas('mapa_fazendas', 'id'),
+        supabase.from('configuracoes').select('*').maybeSingle()
+      ]);
 
-      if (errColab || errServ || errMapa) throw new Error("Sem rede");
+      if (errServ) throw new Error("Sem rede");
 
       if (config) {
-        setHoraInicioPermitida(config.hora_inicio);
-        setHoraFimPermitida(config.hora_fim);
-        await AsyncStorage.setItem('@config_horarios', JSON.stringify({ inicio: config.hora_inicio, fim: config.hora_fim }));
+        if (config.hora_inicio) setHoraInicioPermitida(config.hora_inicio);
+        if (config.hora_fim) setHoraFimPermitida(config.hora_fim);
+        await AsyncStorage.setItem('@config_horarios', JSON.stringify({ 
+          inicio: config.hora_inicio || '06:00', 
+          fim: config.hora_fim || '23:00' 
+        }));
       }
 
-      if (colabs) {
-        if (!admin) {
-          colabs = colabs.filter(c => c.fiscal_vinculado === perfilLido.nome || c.fiscal_id === perfilLido.id);
+      if (colabsBrutos) {
+        let colabs = colabsBrutos;
+        if (!admin && perfilLido) {
+          const nomeFiscalNorm = normalizarTexto(perfilLido.nome);
+          colabs = colabs.filter(c => 
+            normalizarTexto(c.fiscal_vinculado) === nomeFiscalNorm || 
+            c.fiscal_id === perfilLido.id
+          );
         }
         setListaColaboradores(colabs); 
         await AsyncStorage.setItem('@mochila_colaboradores', JSON.stringify(colabs)); 
@@ -208,15 +285,18 @@ export default function HomeScreen() {
         await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs)); 
       }
       
-      if (mapa) {
-        const mapaFiltrado = mapa.filter(item => {
+      if (mapaBruto) {
+        const mapaLimpo = higienizarListaMapa(mapaBruto);
+        const mapaFiltrado = mapaLimpo.filter(item => {
           if (admin || permitidas.length === 0) return true;
           const fazNorm = normalizarTexto(item.fazenda);
-          return permitidas.some(p => fazNorm.includes(p));
+          return permitidas.some(p => fazNorm.includes(p) || p.includes(fazNorm));
         });
 
         setMapaCompleto(mapaFiltrado);
-        setFazendasDisponiveis([...new Set(mapaFiltrado.map(item => item.fazenda))] as string[]);
+        const fazendasUnicas = [...new Set(mapaFiltrado.map(item => item.fazenda))].filter(Boolean) as string[];
+        fazendasUnicas.sort((a, b) => a.localeCompare(b));
+        setFazendasDisponiveis(fazendasUnicas);
         await AsyncStorage.setItem('@mochila_mapa', JSON.stringify(mapaFiltrado));
       }
       
@@ -230,8 +310,8 @@ export default function HomeScreen() {
 
       if (mochilaConfig) {
         const conf = JSON.parse(mochilaConfig);
-        setHoraInicioPermitida(conf.inicio);
-        setHoraFimPermitida(conf.fim);
+        if (conf.inicio) setHoraInicioPermitida(conf.inicio);
+        if (conf.fim) setHoraFimPermitida(conf.fim);
       }
       if (mochilaColabs) setListaColaboradores(JSON.parse(mochilaColabs));
       
@@ -251,57 +331,64 @@ export default function HomeScreen() {
           if (perfilLido.fazendas_permitidas) {
             permitidas = Array.isArray(perfilLido.fazendas_permitidas) 
               ? perfilLido.fazendas_permitidas.map((f: string) => normalizarTexto(f))
-              : perfilLido.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+              : String(perfilLido.fazendas_permitidas).split(',').map((f: string) => normalizarTexto(f));
           }
         }
 
-        const mapaParsed = JSON.parse(mochilaMapa);
+        const mapaParsed = higienizarListaMapa(JSON.parse(mochilaMapa));
         const mapaFiltrado = mapaParsed.filter((item: any) => {
           if (admin || permitidas.length === 0) return true;
           const fazNorm = normalizarTexto(item.fazenda);
-          return permitidas.some(p => fazNorm.includes(p));
+          return permitidas.some(p => fazNorm.includes(p) || p.includes(fazNorm));
         });
 
         setMapaCompleto(mapaFiltrado);
-        setFazendasDisponiveis([...new Set(mapaFiltrado.map((item: any) => item.fazenda))] as string[]);
+        const fazendasUnicas = [...new Set(mapaFiltrado.map((item: any) => item.fazenda))].filter(Boolean) as string[];
+        fazendasUnicas.sort((a, b) => a.localeCompare(b));
+        setFazendasDisponiveis(fazendasUnicas);
       }
     }
     setCarregandoDados(false);
   };
 
-  const atualizarMochilaManual = () => { carregarUsuarioLogado(); Alert.alert("Atualizando", "Buscando dados..."); };
+  const atualizarMochilaManual = () => { 
+    carregarUsuarioLogado(); 
+    alertaWebMobile("Atualizando", "Buscando dados atualizados do servidor..."); 
+  };
 
+  // Atualiza a lista de quadras disponíveis quando a fazenda muda
   useEffect(() => {
-    if (indexEdicao === null) {
-      setQuadra(''); setRamaisSelecionados([]);
+    if (fazenda) {
+      const quadras = [...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))].filter(Boolean) as string[];
+      quadras.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      setQuadrasDisponiveis(quadras);
+    } else {
+      setQuadrasDisponiveis([]);
     }
-    if (fazenda) setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))] as string[]);
-    else setQuadrasDisponiveis([]);
   }, [fazenda, mapaCompleto]);
 
+  // Atualiza a lista de ramais disponíveis quando a quadra muda
   useEffect(() => {
-    if (indexEdicao === null) {
-      setRamaisSelecionados([]);
-    }
-    if (quadra) {
+    if (fazenda && quadra) {
       const ramaisDessaQuadra = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra);
       
       const ramaisUnicosMap = new Map();
       ramaisDessaQuadra.forEach(r => {
-         const rStr = String(r.ramal);
-         if (!ramaisUnicosMap.has(rStr)) {
-             ramaisUnicosMap.set(rStr, r);
-         }
+        const rStr = String(r.ramal);
+        if (!ramaisUnicosMap.has(rStr)) {
+          ramaisUnicosMap.set(rStr, r);
+        }
       });
       
       const ramaisUnicos = Array.from(ramaisUnicosMap.values());
-      ramaisUnicos.sort((a: any, b: any) => parseInt(a.ramal) - parseInt(b.ramal));
+      ramaisUnicos.sort((a: any, b: any) => String(a.ramal).localeCompare(String(b.ramal), undefined, { numeric: true }));
       setRamaisDisponiveis(ramaisUnicos);
     } else {
       setRamaisDisponiveis([]);
     }
   }, [quadra, fazenda, mapaCompleto]);
 
+  // Filtra os serviços permitidos para a fazenda selecionada
   useEffect(() => {
     if (!fazenda) {
       setServicosFiltrados(listaServicos);
@@ -315,9 +402,9 @@ export default function HomeScreen() {
 
       let permitidas: string[] = [];
       if (Array.isArray(s.fazendas_permitidas)) {
-        permitidas = s.fazendas_permitidas.map(f => normalizarTexto(f));
+        permitidas = s.fazendas_permitidas.map((f: string) => normalizarTexto(f));
       } else {
-        permitidas = String(s.fazendas_permitidas).split(',').map(f => normalizarTexto(f));
+        permitidas = String(s.fazendas_permitidas).split(',').map((f: string) => normalizarTexto(f));
       }
 
       return permitidas.some(p => fazendaNorm.includes(p) || p.includes(fazendaNorm));
@@ -331,20 +418,22 @@ export default function HomeScreen() {
     }
   }, [fazenda, listaServicos]);
 
+  // Calcula o valor total em R$
   useEffect(() => {
     if (servicoSelecionadoCompleto && quantidade) {
       const qtdNum = converterParaNumero(quantidade);
-      let valorUnitario = servicoSelecionadoCompleto.preco_base || 0;
+      let valorUnitario = Number(servicoSelecionadoCompleto.preco_base) || 0;
       if (servicoSelecionadoCompleto.tipo_cobranca === 'milheiro') valorUnitario = valorUnitario / 1000;
-      setValorTotalCalculado(qtdNum * valorUnitario);
-    } else setValorTotalCalculado(0);
+      setValorTotalCalculado(arredondarMoeda(qtdNum * valorUnitario));
+    } else {
+      setValorTotalCalculado(0);
+    }
   }, [servicoSelecionadoCompleto, quantidade]);
 
-  const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta');
+  const isColeta = servicoSelecionadoCompleto?.nome?.toLowerCase().includes('coleta') || servico?.toLowerCase().includes('coleta');
   const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
   
-  // 🟢 FORÇA O RECONHECIMENTO DO CORINGA MESMO SE FOR STRING "sim", "true", etc.
   const isServicoCoringa = servicoSelecionadoCompleto?.is_coringa === true || 
                            String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'sim' || 
                            String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'true' ||
@@ -355,53 +444,81 @@ export default function HomeScreen() {
 
   if (ramaisSelecionados.length > 0) {
     const cadastrosSelecionados = mapaCompleto.filter(m => 
-        m.fazenda === fazenda && 
-        m.quadra === quadra && 
-        ramaisSelecionados.includes(String(m.ramal))
+      m.fazenda === fazenda && 
+      m.quadra === quadra && 
+      ramaisSelecionados.includes(String(m.ramal))
     );
 
     const mapaServicos = new Map<string, number>();
     cadastrosSelecionados.forEach(cad => {
-        const nomeSrv = cad.servico_permitido ? String(cad.servico_permitido).trim() : 'Livre';
-        const pes = converterParaNumero(cad.total_pes);
-        mapaServicos.set(nomeSrv, (mapaServicos.get(nomeSrv) || 0) + pes);
+      const nomeSrv = cad.servico_permitido ? String(cad.servico_permitido).trim() : 'Livre';
+      const pes = converterParaNumero(cad.total_pes);
+      mapaServicos.set(nomeSrv, (mapaServicos.get(nomeSrv) || 0) + pes);
     });
 
     mapaServicos.forEach((total, srv) => {
-        capacidadesDisponiveis.push({ servico: srv, total });
+      capacidadesDisponiveis.push({ servico: srv, total });
     });
 
     const servicoFormatado = String(servico).trim().toUpperCase();
     let matchedTotal = 0;
     
     for (let cap of capacidadesDisponiveis) {
-        if (cap.servico.toUpperCase() === servicoFormatado) {
+      if (cap.servico.toUpperCase() === servicoFormatado) {
+        matchedTotal = cap.total;
+        break;
+      }
+    }
+    
+    if (matchedTotal === 0) {
+      let maiorPontuacao = -1;
+      for (let cap of capacidadesDisponiveis) {
+        if (cap.servico !== 'Livre') {
+          const score = calcularSimilaridade(servicoFormatado, cap.servico);
+          if (score > maiorPontuacao && score > 0) {
+            maiorPontuacao = score;
             matchedTotal = cap.total;
-            break;
+          }
         }
+      }
     }
     
     if (matchedTotal === 0) {
-        let maiorPontuacao = -1;
-        for (let cap of capacidadesDisponiveis) {
-            if (cap.servico !== 'Livre') {
-                const score = calcularSimilaridade(servicoFormatado, cap.servico);
-                if (score > maiorPontuacao && score > 0) {
-                    maiorPontuacao = score;
-                    matchedTotal = cap.total;
-                }
-            }
-        }
-    }
-    
-    if (matchedTotal === 0) {
-        const livre = capacidadesDisponiveis.find(c => c.servico === 'Livre');
-        if (livre) matchedTotal = livre.total;
-        else if (capacidadesDisponiveis.length > 0) matchedTotal = capacidadesDisponiveis[0].total;
+      const livre = capacidadesDisponiveis.find(c => c.servico === 'Livre');
+      if (livre) matchedTotal = livre.total;
+      else if (capacidadesDisponiveis.length > 0) matchedTotal = capacidadesDisponiveis[0].total;
     }
 
     limitePesCalculado = matchedTotal > 0 ? matchedTotal : null;
   }
+
+  const handleTrocaFazenda = (novaFazenda: string) => {
+    setFazenda(novaFazenda);
+    setQuadra('');
+    setRamaisSelecionados([]);
+    setQuantidade('');
+  };
+
+  const handleTrocaQuadra = (novaQuadra: string) => {
+    setQuadra(novaQuadra);
+    setRamaisSelecionados([]);
+    setQuantidade('');
+  };
+
+  const handleTrocaServico = (novoServicoNome: string) => {
+    const objServico = servicosFiltrados.find(s => s.nome === novoServicoNome) || listaServicos.find(s => s.nome === novoServicoNome) || null;
+    setServico(novoServicoNome);
+    setServicoSelecionadoCompleto(objServico);
+
+    const novoIsColeta = objServico?.nome?.toLowerCase().includes('coleta') || novoServicoNome.toLowerCase().includes('coleta');
+    const novoPermiteMultiplos = objServico?.permite_multiplos === true || novoIsColeta;
+
+    // Se trocou para um serviço que só aceita 1 ramal, mantém apenas o primeiro ou limpa a quantidade para revalidar
+    if (!novoPermiteMultiplos && ramaisSelecionados.length > 1) {
+      setRamaisSelecionados([ramaisSelecionados[0]]);
+    }
+    setQuantidade('');
+  };
 
   const toggleRamal = (ramalStr: string) => {
     if (permiteMultiplosRamais) {
@@ -423,15 +540,7 @@ export default function HomeScreen() {
     const valorDigitado = converterParaNumero(texto);
     
     const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
-    const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || 'Não Identificado';
-
-    // 🟢 LOGS DE DEBUG NO TERMINAL PARA ENTENDERMOS SE FALHAR
-    console.log('--- DEBUG DIGITAÇÃO ---');
-    console.log('Servico Nome:', servico);
-    console.log('Objeto Completo:', servicoSelecionadoCompleto);
-    console.log('É Coringa (TRUE/FALSE)?', isServicoCoringa);
-    console.log('Limite Calculado:', limitePesCalculado);
-    console.log('Valor Digitado:', valorDigitado);
+    const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || perfilLogado?.nome || 'Não Identificado';
 
     if (!isCarregamentoResina && !isServicoCoringa && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
       if (!isOffline) {
@@ -446,7 +555,7 @@ export default function HomeScreen() {
           fiscal_nome: fiscalRealDaEquipe
         }]).then().catch(() => { console.log('Alerta bloqueado pela falta de rede'); }); 
       }
-      Alert.alert("⚠️ Limite Excedido", "A quantidade informada é maior que o limite deste serviço no(s) ramal(is) selecionado(s).");
+      alertaWebMobile("⚠️ Limite Excedido", "A quantidade informada é maior que o limite deste serviço no(s) ramal(is) selecionado(s).");
       setQuantidade(''); 
     } else {
       setQuantidade(texto);
@@ -455,19 +564,22 @@ export default function HomeScreen() {
 
   const prepararEdicao = (index: number) => {
     const item = lancamentosPendentes[index];
+    setIndexEdicao(index);
+    setDataOriginalEdicao(item.data);
+
     setColaborador(item.colaborador);
-    setFazenda(item.fazenda);
-    setQuadra(item.quadra && item.quadra !== '-' ? item.quadra : '');
+    setFazenda(limparTextoExibicao(item.fazenda));
+    setQuadra(item.quadra && item.quadra !== '-' ? limparTextoExibicao(item.quadra) : '');
     
-    let nomePuroServico = item.servico;
-    if (item.servico.includes(' - HÍBRIDO')) {
-      nomePuroServico = item.servico.replace(' - HÍBRIDO', '');
+    let nomePuroServico = String(item.servico || '').replace(/\r?\n/g, ' - ').trim();
+    if (nomePuroServico.includes(' - HÍBRIDO')) {
+      nomePuroServico = nomePuroServico.replace(' - HÍBRIDO', '').trim();
       setTipoResina('HÍBRIDO');
-    } else if (item.servico.includes(' - TROPICAL')) {
-      nomePuroServico = item.servico.replace(' - TROPICAL', '');
+    } else if (nomePuroServico.includes(' - TROPICAL')) {
+      nomePuroServico = nomePuroServico.replace(' - TROPICAL', '').trim();
       setTipoResina('TROPICAL');
-    } else if (item.servico.includes(' - ELLIOTTI')) {
-      nomePuroServico = item.servico.replace(' - ELLIOTTI', '');
+    } else if (nomePuroServico.includes(' - ELLIOTTI')) {
+      nomePuroServico = nomePuroServico.replace(' - ELLIOTTI', '').trim();
       setTipoResina('ELLIOTTI');
     }
 
@@ -476,15 +588,13 @@ export default function HomeScreen() {
     setServicoSelecionadoCompleto(servicoEncontrado);
     
     if (item.ramal && item.ramal !== '-') {
-      const ramaisArray = String(item.ramal).split(', ');
+      const ramaisArray = String(item.ramal).split(',').map(r => r.trim()).filter(Boolean);
       setRamaisSelecionados(ramaisArray);
     } else {
       setRamaisSelecionados([]);
     }
     
     setQuantidade(String(item.quantidade));
-    setIndexEdicao(index);
-    setDataOriginalEdicao(item.data);
     setModalPendentesVisivel(false);
   };
 
@@ -501,63 +611,70 @@ export default function HomeScreen() {
 
   const salvarLancamento = async () => {
     if (!colaborador || !servico || !fazenda || !quantidade) { 
-      return Alert.alert("Aviso", "Preencha os campos obrigatórios principais!"); 
+      return alertaWebMobile("Aviso", "Preencha os campos obrigatórios principais!"); 
     }
+
+    const qtdNumerica = converterParaNumero(quantidade);
+    if (qtdNumerica <= 0) {
+      return alertaWebMobile("Aviso", "Informe uma quantidade válida maior que zero!");
+    }
+
+    const dataMomento = new Date();
+    const hojeLocalISO = obterDataHojeLocalISO(dataMomento);
 
     if (!isCarregamentoResina) {
       if (!quadra || ramaisSelecionados.length === 0) {
-        return Alert.alert("Aviso", "Preencha a Quadra e Selecione ao menos 1 Ramal!");
+        return alertaWebMobile("Aviso", "Preencha a Quadra e selecione ao menos 1 Ramal!");
       }
       
-      const dataMomento = new Date();
       for (let rStr of ramaisSelecionados) {
         const ramalRows = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === rStr);
         if (ramalRows.length === 0) {
-          return Alert.alert("❌ Erro", `Dados do ramal ${rStr} não encontrados.`);
+          return alertaWebMobile("❌ Erro", `Dados do ramal ${rStr} não encontrados nesta quadra.`);
         }
         for (let row of ramalRows) {
           if (row.data_bloqueio) {
-            const hojeISO = dataMomento.toISOString().split('T')[0];
-            if (hojeISO !== row.data_bloqueio) { 
-              return Alert.alert("📅 Data Bloqueada", `Ramal ${row.ramal} tem restrição e só pode ser lançado em: ${new Date(row.data_bloqueio + 'T00:00:00').toLocaleDateString('pt-BR')}`); 
+            if (hojeLocalISO !== row.data_bloqueio) { 
+              return alertaWebMobile("📅 Data Bloqueada", `Ramal ${row.ramal} tem restrição e só pode ser lançado em: ${new Date(row.data_bloqueio + 'T12:00:00').toLocaleDateString('pt-BR')}`); 
             }
           }
         }
       }
 
-      // 🟢 LOGS DE DEBUG NO SALVAR
-      console.log('--- DEBUG SALVAR ---');
-      console.log('É Coringa?', isServicoCoringa);
-      
-      if (!isServicoCoringa && limitePesCalculado !== null && converterParaNumero(quantidade) > limitePesCalculado) {
-          setQuantidade('');
-          return Alert.alert("⚠️ Limite Excedido", "A quantidade informada ultrapassa o limite.");
+      if (!isServicoCoringa && limitePesCalculado !== null && qtdNumerica > limitePesCalculado) {
+        setQuantidade('');
+        return alertaWebMobile("⚠️ Limite Excedido", "A quantidade informada ultrapassa o limite permitido para este(s) ramal(is).");
       }
     }
     
-    const dataMomento = new Date();
     const horaAtualMinutos = dataMomento.getHours() * 60 + dataMomento.getMinutes();
     
-    const [horaIniStr, minIniStr] = horaInicioPermitida.split(':');
-    const [horaFimStr, minFimStr] = horaFimPermitida.split(':');
-    const minutosInicio = (parseInt(horaIniStr) * 60) + (parseInt(minIniStr) || 0);
-    const minutosFim = (parseInt(horaFimStr) * 60) + (parseInt(minFimStr) || 0);
+    const [horaIniStr, minIniStr] = (horaInicioPermitida || '06:00').split(':');
+    const [horaFimStr, minFimStr] = (horaFimPermitida || '23:00').split(':');
+    const minutosInicio = (parseInt(horaIniStr, 10) * 60) + (parseInt(minIniStr, 10) || 0);
+    const minutosFim = (parseInt(horaFimStr, 10) * 60) + (parseInt(minFimStr, 10) || 0);
 
     if (horaAtualMinutos < minutosInicio || horaAtualMinutos > minutosFim) {
-      return Alert.alert("🚫 Fora do Expediente", `Permitido apenas entre ${horaInicioPermitida} e ${horaFimPermitida}.`);
+      return alertaWebMobile("🚫 Fora do Expediente", `Permitido apenas entre ${horaInicioPermitida} e ${horaFimPermitida}.`);
     }
 
     setSalvando(true);
-    let valorUnitario = servicoSelecionadoCompleto?.preco_base || 0;
+    let valorUnitario = Number(servicoSelecionadoCompleto?.preco_base) || 0;
     if (servicoSelecionadoCompleto?.tipo_cobranca === 'milheiro') valorUnitario = valorUnitario / 1000;
 
     try {
       const numRamalFinal = isCarregamentoResina ? '-' : ramaisSelecionados.join(', ');
       const quadraFinal = isCarregamentoResina ? '-' : quadra;
+      
+      // 🟢 CORREÇÃO DO NOME DA COLETA COM TRAÇO (" - ") EM UMA ÚNICA LINHA
       const nomeServicoFinalParaOBanco = isColeta ? `${servico} - ${tipoResina}` : servico;
 
       const dadosColaborador = listaColaboradores.find(c => c.nome === colaborador);
-      const fiscalOficialDaEquipe = dadosColaborador?.fiscal_vinculado || 'Não Identificado';
+      const fiscalOficialDaEquipe = dadosColaborador?.fiscal_vinculado || perfilLogado?.nome || 'Não Identificado';
+
+      // Mantém a data local correta no início da string ISO para nunca virar o dia após as 21h
+      const horaLocalStr = dataMomento.toTimeString().split(' ')[0];
+      const dataIsoLocalSegura = `${hojeLocalISO}T${horaLocalStr}.000Z`;
 
       const novoLancamento = {
         colaborador, 
@@ -565,10 +682,10 @@ export default function HomeScreen() {
         fazenda, 
         quadra: quadraFinal, 
         ramal: numRamalFinal, 
-        quantidade: converterParaNumero(quantidade), 
+        quantidade: qtdNumerica, 
         valor_unitario: valorUnitario, 
-        valor_total: valorTotalCalculado, 
-        data: dataOriginalEdicao ? dataOriginalEdicao : dataMomento.toISOString(),
+        valor_total: arredondarMoeda(qtdNumerica * valorUnitario), 
+        data: dataOriginalEdicao ? dataOriginalEdicao : dataIsoLocalSegura,
         fiscal_nome: fiscalOficialDaEquipe 
       };
 
@@ -593,67 +710,74 @@ export default function HomeScreen() {
       setDataOriginalEdicao(null);
 
     } catch (e) {
-      Alert.alert("Erro", "Não foi possível salvar no celular.");
+      alertaWebMobile("Erro", "Não foi possível salvar no dispositivo.");
     } finally {
       setSalvando(false);
     }
   };
 
+  // 🟢 SINCRONIZAÇÃO SEGURA LOTE A LOTE (Nunca duplica lotes já enviados se a rede cair no meio)
   const sincronizarComBanco = async () => {
     if (lancamentosPendentes.length === 0) return;
     setSincronizando(true);
 
+    let filaRestante = [...lancamentosPendentes];
+
     try {
-      const lancamentosProntosParaNuvem = lancamentosPendentes.map(item => {
-        const { foto_local, foto_url, ...dados } = item;
-        if (!dados.quadra || dados.quadra === null) dados.quadra = '-';
-        if (!dados.ramal || dados.ramal === null) dados.ramal = '-';
-        
-        const colabRef = listaColaboradores.find(c => c.nome === dados.colaborador);
-        if(colabRef && colabRef.fiscal_vinculado) {
-             dados.fiscal_nome = colabRef.fiscal_vinculado;
-        }
-
-        return dados;
-      });
-
       const tamanhoLote = 50;
-      for (let i = 0; i < lancamentosProntosParaNuvem.length; i += tamanhoLote) {
-        const lote = lancamentosProntosParaNuvem.slice(i, i + tamanhoLote);
-        const { error: dbError } = await supabase.from('diarios_campo').insert(lote);
-        if (dbError) throw new Error(`Falha no lote ${i}: ${dbError.message}`);
+      while (filaRestante.length > 0) {
+        const loteAtual = filaRestante.slice(0, tamanhoLote);
+
+        const loteProntoParaNuvem = loteAtual.map(item => {
+          const { foto_local, foto_url, ...dados } = item;
+          if (!dados.quadra || dados.quadra === null) dados.quadra = '-';
+          if (!dados.ramal || dados.ramal === null) dados.ramal = '-';
+          
+          const colabRef = listaColaboradores.find(c => c.nome === dados.colaborador);
+          if (colabRef && colabRef.fiscal_vinculado) {
+            dados.fiscal_nome = colabRef.fiscal_vinculado;
+          }
+
+          return dados;
+        });
+
+        const { error: dbError } = await supabase.from('diarios_campo').insert(loteProntoParaNuvem);
+        if (dbError) throw new Error(dbError.message);
+
+        // Remove imediatamente os itens que já foram salvos no banco
+        filaRestante = filaRestante.slice(tamanhoLote);
+        setLancamentosPendentes(filaRestante);
+        if (filaRestante.length > 0) {
+          await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(filaRestante));
+        } else {
+          await AsyncStorage.removeItem('@lancamentos_off');
+        }
       }
       
-      await AsyncStorage.removeItem('@lancamentos_off');
-      setLancamentosPendentes([]);
       carregarDadosBase(perfilLogado, perfilLogado?.id || null);
-      Alert.alert("🚀 Sincronizado com Sucesso!", "Todas as produções foram enviadas.");
+      alertaWebMobile("🚀 Sincronizado com Sucesso!", "Todas as produções foram enviadas.");
       
     } catch (e: any) {
-      Alert.alert("Erro na Sincronização", "A internet falhou no meio do envio. Tente novamente para enviar o restante: " + e.message);
+      alertaWebMobile(
+        "Erro na Sincronização", 
+        `A internet falhou. Restam ${filaRestante.length} lançamento(s) seguros no aparelho para tentar novamente.\n\nDetalhe: ${e.message}`
+      );
     } finally {
       setSincronizando(false);
     }
   };
 
-  const excluirLancamentoPendente = async (index: number) => {
-    Alert.alert(
+  const excluirLancamentoPendente = (index: number) => {
+    confirmacaoWebMobile(
       "Excluir Lançamento",
       "Tem certeza que deseja apagar este registro?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        { 
-          text: "Apagar", 
-          style: "destructive",
-          onPress: async () => {
-            const novaLista = [...lancamentosPendentes];
-            novaLista.splice(index, 1);
-            await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
-            setLancamentosPendentes(novaLista);
-            if (indexEdicao === index) cancelarEdicao();
-          }
-        }
-      ]
+      async () => {
+        const novaLista = [...lancamentosPendentes];
+        novaLista.splice(index, 1);
+        await AsyncStorage.setItem('@lancamentos_off', JSON.stringify(novaLista));
+        setLancamentosPendentes(novaLista);
+        if (indexEdicao === index) cancelarEdicao();
+      }
     );
   };
 
@@ -728,7 +852,7 @@ export default function HomeScreen() {
                   <View style={styles.col}>
                     <Text style={styles.label}>Fazenda:</Text>
                     <View style={styles.pickerContainer}>
-                      <Picker selectedValue={fazenda} onValueChange={setFazenda} style={styles.picker}>
+                      <Picker selectedValue={fazenda} onValueChange={handleTrocaFazenda} style={styles.picker}>
                         <Picker.Item label="..." value="" />
                         {fazendasDisponiveis.map((f, i) => (<Picker.Item key={i} label={f} value={f} />))}
                       </Picker>
@@ -738,7 +862,7 @@ export default function HomeScreen() {
                   <View style={styles.col}>
                     <Text style={styles.label}>Quadra:</Text>
                     <View style={[styles.pickerContainer, (!fazenda || isCarregamentoResina) && styles.disabled]}>
-                      <Picker enabled={!!fazenda && !isCarregamentoResina} selectedValue={isCarregamentoResina ? "" : quadra} onValueChange={setQuadra} style={styles.picker}>
+                      <Picker enabled={!!fazenda && !isCarregamentoResina} selectedValue={isCarregamentoResina ? "" : quadra} onValueChange={handleTrocaQuadra} style={styles.picker}>
                         <Picker.Item label={isCarregamentoResina ? "Não exigida" : "..."} value="" />
                         {!isCarregamentoResina && quadrasDisponiveis.map((q, i) => (<Picker.Item key={i} label={q} value={q} />))}
                       </Picker>
@@ -750,10 +874,7 @@ export default function HomeScreen() {
                 <View style={styles.pickerContainer}>
                   <Picker 
                     selectedValue={servico} 
-                    onValueChange={(v) => { 
-                      setServico(v); 
-                      setServicoSelecionadoCompleto(servicosFiltrados.find(s => s.nome === v)); 
-                    }} 
+                    onValueChange={handleTrocaServico} 
                     style={styles.picker}
                   >
                     <Picker.Item label={fazenda ? "Selecione o Serviço..." : "Selecione a fazenda primeiro..."} value="" />
@@ -822,11 +943,11 @@ export default function HomeScreen() {
                                 onPress={() => handleMudancaQuantidade(String(cap.total))}
                               >
                                 <View style={styles.dicaRow}>
-                                    <Ionicons name="add-circle" size={24} color={isServicoCoringa ? "#E67E22" : "#3498DB"} />
-                                    <View style={styles.dicaInfo}>
-                                        <Text style={styles.dicaBotaoTotal}>{cap.total} pés</Text>
-                                        <Text style={styles.dicaBotaoServico}>{cap.servico}</Text>
-                                    </View>
+                                  <Ionicons name="add-circle" size={24} color={isServicoCoringa ? "#E67E22" : "#3498DB"} />
+                                  <View style={styles.dicaInfo}>
+                                    <Text style={styles.dicaBotaoTotal}>{cap.total} pés</Text>
+                                    <Text style={styles.dicaBotaoServico}>{cap.servico}</Text>
+                                  </View>
                                 </View>
                               </TouchableOpacity>
                             ))}

@@ -14,9 +14,44 @@ const alertaHibrido = (titulo: string, mensagem: string) => {
 };
 
 // 🟢 FUNÇÃO INTELIGENTE QUE IGNORA ACENTOS E FORMATA TEXTO
-const normalizarTexto = (txt: string) => {
+const normalizarTexto = (txt: any) => {
   if (!txt) return '';
-  return txt.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+  return String(txt).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, ' ').trim();
+};
+
+const limparVisual = (txt: any) => {
+  if (!txt) return 'N/A';
+  return String(txt).trim().replace(/\s+/g, ' ').toUpperCase();
+};
+
+// 🟢 BUSCA PAGINADA COMPLETA (Burla o limite de 1.000 linhas do Supabase)
+const buscarTodoOMapa = async () => {
+  let todosOsDados: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from('mapa_fazendas')
+      .select('id, fazenda, quadra, ramal, total_pes, servico_permitido')
+      .order('id', { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todosOsDados = [...todosOsDados, ...data];
+      if (data.length < limite) {
+        buscando = false;
+      } else {
+        inicio += limite;
+      }
+    } else {
+      buscando = false;
+    }
+  }
+  return todosOsDados;
 };
 
 // =========================================================================
@@ -92,6 +127,7 @@ const ResumoCard = memo(({ fazenda, total, quadras }: any) => {
 export default function MapaScreen() {
   const [abaAtiva, setAbaAtiva] = useState<'mapa' | 'resumo'>('mapa');
 
+  const [mapaCompletoCache, setMapaCompletoCache] = useState<any[]>([]);
   const [dadosBrutos, setDadosBrutos] = useState<any[]>([]);
   const [dadosAgrupadosParaPDF, setDadosAgrupadosParaPDF] = useState<any>({});
   const [listaPlanaParaUI, setListaPlanaParaUI] = useState<any[]>([]);
@@ -99,6 +135,7 @@ export default function MapaScreen() {
   const [totalGeralArvores, setTotalGeralArvores] = useState(0);
   const [totalGeralResumo, setTotalGeralResumo] = useState(0); 
   const [carregando, setCarregando] = useState(false); 
+  const [salvandoModal, setSalvandoModal] = useState(false);
   const [gerandoPDF, setGerandoPDF] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [listaServicos, setListaServicos] = useState<any[]>([]);
@@ -147,7 +184,7 @@ export default function MapaScreen() {
 
   useEffect(() => {
     if (buscaFazenda && buscaQuadra && dicionario[buscaFazenda]?.quadras[buscaQuadra]) {
-      const ramais = dicionario[buscaFazenda].quadras[buscaQuadra].ramais.sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
+      const ramais = [...dicionario[buscaFazenda].quadras[buscaQuadra].ramais].sort((a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }));
       setRamaisDisponiveis(ramais);
     } else {
       setRamaisDisponiveis([]);
@@ -160,20 +197,31 @@ export default function MapaScreen() {
     let permitidas: string[] = [];
 
     try {
+      let perfil: any = null;
       const perfilSalvo = await AsyncStorage.getItem('@perfil_offline');
       if (perfilSalvo) {
-        const perfil = JSON.parse(perfilSalvo);
+        perfil = JSON.parse(perfilSalvo);
+      } else {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const { data: pData } = await supabase.from('perfis').select('*').eq('id', session.user.id).maybeSingle();
+          if (pData) {
+            perfil = pData;
+            await AsyncStorage.setItem('@perfil_offline', JSON.stringify(pData));
+          }
+        }
+      }
+
+      if (perfil) {
         const cargoLimpo = perfil.cargo ? normalizarTexto(perfil.cargo) : '';
-        
         admin = (cargoLimpo === 'ADMINISTRADOR' || cargoLimpo === 'SUPERVISOR');
         setIsAdmin(admin);
         setPodeEditar(admin);
 
-        // APLICA O NORMALIZADOR NAS FAZENDAS DIGITADAS NO PAINEL
         if (perfil.fazendas_permitidas) {
           permitidas = Array.isArray(perfil.fazendas_permitidas) 
             ? perfil.fazendas_permitidas.map((f: string) => normalizarTexto(f))
-            : perfil.fazendas_permitidas.split(',').map((f: string) => normalizarTexto(f));
+            : String(perfil.fazendas_permitidas).split(',').map((f: string) => normalizarTexto(f));
         }
         setFazendasPermitidas(permitidas);
       }
@@ -187,21 +235,25 @@ export default function MapaScreen() {
   const carregarDicionarioEServicos = async (admin: boolean, permitidas: string[]) => {
     setCarregando(true);
     try {
-      const { data: servs } = await supabase.from('servicos').select('*').order('nome');
+      const [
+        { data: servs, error: errServ },
+        mapaCompleto
+      ] = await Promise.all([
+        supabase.from('servicos').select('*').order('nome'),
+        buscarTodoOMapa()
+      ]);
+
+      if (errServ) throw errServ;
+
       if (servs) {
         setListaServicos(servs);
         await AsyncStorage.setItem('@mochila_servicos', JSON.stringify(servs));
       }
 
-      // 🟢 PUXA TUDO E DEIXA O APLICATIVO FILTRAR ISSO INTELIGENTEMENTE
-      const queryMapa = supabase.from('mapa_fazendas').select('fazenda, quadra, ramal, total_pes').limit(6000);
-      const { data: mapaResumo, error } = await queryMapa;
-      
-      if (error) throw new Error("Falha na rede");
-
-      if (mapaResumo) {
-        montarDicionario(mapaResumo, admin, permitidas);
-        await AsyncStorage.setItem('@mochila_dicionario_mapa', JSON.stringify(mapaResumo));
+      if (mapaCompleto) {
+        setMapaCompletoCache(mapaCompleto);
+        montarDicionario(mapaCompleto, admin, permitidas);
+        await AsyncStorage.setItem('@mochila_dicionario_mapa', JSON.stringify(mapaCompleto));
       }
       setIsOffline(false);
     } catch (error) {
@@ -209,8 +261,12 @@ export default function MapaScreen() {
       const servsOffline = await AsyncStorage.getItem('@mochila_servicos');
       if (servsOffline) setListaServicos(JSON.parse(servsOffline));
 
-      const mapaOffline = await AsyncStorage.getItem('@mochila_dicionario_mapa');
-      if (mapaOffline) montarDicionario(JSON.parse(mapaOffline), admin, permitidas);
+      const mapaOffline = await AsyncStorage.getItem('@mochila_dicionario_mapa') || await AsyncStorage.getItem('@mochila_mapa');
+      if (mapaOffline) {
+        const parsed = JSON.parse(mapaOffline);
+        setMapaCompletoCache(parsed);
+        montarDicionario(parsed, admin, permitidas);
+      }
     }
     setCarregando(false);
   };
@@ -218,26 +274,21 @@ export default function MapaScreen() {
   const montarDicionario = (data: any[], admin: boolean, permitidas: string[]) => {
     const dic: any = {};
     let somaResumoLocal = 0; 
-    
-    // Mantém a visualização bonita na tela
-    const limparVisual = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
     data.forEach(item => {
       const fazVisual = limparVisual(item.fazenda);
-      const fazNorm = normalizarTexto(item.fazenda); // Formato limpo sem acento para checagem
+      const fazNorm = normalizarTexto(item.fazenda);
 
-      // 🟢 BLOQUEIO INTELIGENTE: Verifica se a fazenda atual contém algum texto permitido
       let acessoPermitido = admin;
       if (!admin && permitidas.length > 0) {
-        acessoPermitido = permitidas.some(p => fazNorm.includes(p));
+        acessoPermitido = permitidas.some(p => fazNorm.includes(p) || p.includes(fazNorm));
       }
 
-      // Se a regra disse não, descarta a fazenda e vai para a próxima linha
       if (!acessoPermitido) return;
 
       const qdr = limparVisual(item.quadra);
       const ramal = limparVisual(item.ramal);
-      const pes = item.total_pes || 0;
+      const pes = Number(item.total_pes) || 0;
 
       somaResumoLocal += pes; 
 
@@ -268,6 +319,24 @@ export default function MapaScreen() {
     setListaResumo(resumo);
   };
 
+  const filtrarDadosLocalmente = (base: any[]) => {
+    const fazBuscaNorm = normalizarTexto(buscaFazenda);
+    const qdrBuscaNorm = normalizarTexto(buscaQuadra);
+    const ramBuscaNorm = normalizarTexto(buscaRamal);
+
+    return base.filter((i: any) => {
+      if (fazBuscaNorm && normalizarTexto(i.fazenda) !== fazBuscaNorm) return false;
+      if (qdrBuscaNorm && normalizarTexto(i.quadra) !== qdrBuscaNorm) return false;
+      if (ramBuscaNorm && normalizarTexto(i.ramal) !== ramBuscaNorm) return false;
+
+      if (!isAdmin && fazendasPermitidas.length > 0) {
+        const fNorm = normalizarTexto(i.fazenda);
+        if (!fazendasPermitidas.some(p => fNorm.includes(p) || p.includes(fNorm))) return false;
+      }
+      return true;
+    });
+  };
+
   const buscarMapaDetalhado = async () => {
     if (!buscaFazenda) {
       return alertaHibrido("Aviso", "Selecione pelo menos a Fazenda.");
@@ -276,20 +345,22 @@ export default function MapaScreen() {
     setCarregando(true);
 
     try {
-      // Como o dicionário de buscaFazenda JÁ ESTÁ BLOQUEADO e filtrado, não precisa aplicar filtro rígido aqui
-      let query = supabase.from('mapa_fazendas').select('id, fazenda, quadra, ramal, total_pes, servico_permitido').ilike('fazenda', buscaFazenda);
-      
-      if (buscaQuadra) query = query.ilike('quadra', buscaQuadra);
-      if (buscaRamal) query = query.ilike('ramal', buscaRamal);
-
-      const { data, error } = await query.limit(3000);
+      // Usa "%" no ilike da fazenda para ignorar eventuais espaços extras no banco, e filtra quadra/ramal com precisão
+      const { data, error } = await supabase
+        .from('mapa_fazendas')
+        .select('id, fazenda, quadra, ramal, total_pes, servico_permitido')
+        .ilike('fazenda', `%${buscaFazenda.trim()}%`)
+        .order('id', { ascending: true })
+        .range(0, 4999);
         
       if (error) throw new Error("Falha na rede");
       
-      if (data && data.length > 0) {
-        setDadosBrutos(data);
-        processarDadosMapa(data);
-        await AsyncStorage.setItem('@mochila_mapa_ultimo', JSON.stringify(data));
+      const filtrados = filtrarDadosLocalmente(data || []);
+
+      if (filtrados.length > 0) {
+        setDadosBrutos(filtrados);
+        processarDadosMapa(filtrados);
+        await AsyncStorage.setItem('@mochila_mapa_ultimo', JSON.stringify(filtrados));
       } else {
         alertaHibrido("Vazio", "Nenhuma árvore encontrada para este filtro.");
         setDadosBrutos([]);
@@ -298,33 +369,21 @@ export default function MapaScreen() {
       setIsOffline(false); 
     } catch (error) {
       setIsOffline(true);
-      const mapaOffline = await AsyncStorage.getItem('@mochila_mapa_ultimo');
-      
-      if (mapaOffline) {
-        let dadosOff = JSON.parse(mapaOffline);
-        
-        if (buscaFazenda) dadosOff = dadosOff.filter((i: any) => normalizarTexto(i.fazenda) === normalizarTexto(buscaFazenda));
-        if (buscaQuadra) dadosOff = dadosOff.filter((i: any) => normalizarTexto(i.quadra) === normalizarTexto(buscaQuadra));
-        if (buscaRamal) dadosOff = dadosOff.filter((i: any) => normalizarTexto(String(i.ramal)) === normalizarTexto(String(buscaRamal)));
+      // 🟢 Se estiver offline, filtra diretamente do mapa completo salvo no aparelho
+      let baseOffline = mapaCompletoCache;
+      if (baseOffline.length === 0) {
+        const salvo = await AsyncStorage.getItem('@mochila_dicionario_mapa') || await AsyncStorage.getItem('@mochila_mapa') || await AsyncStorage.getItem('@mochila_mapa_ultimo');
+        if (salvo) baseOffline = JSON.parse(salvo);
+      }
 
-        // Segurança offline extra
-        if (!isAdmin && fazendasPermitidas.length > 0) {
-           dadosOff = dadosOff.filter((i: any) => {
-             const fNorm = normalizarTexto(i.fazenda);
-             return fazendasPermitidas.some(p => fNorm.includes(p));
-           });
-        }
+      const dadosOff = filtrarDadosLocalmente(baseOffline);
 
-        if (dadosOff.length > 0) {
-          setDadosBrutos(dadosOff);
-          processarDadosMapa(dadosOff);
-          alertaHibrido("Offline", "Mostrando dados salvos no tablet.");
-        } else {
-          alertaHibrido("Offline", "O filtro selecionado não estava salvo no tablet.");
-          setDadosBrutos([]);
-          processarDadosMapa([]);
-        }
+      if (dadosOff.length > 0) {
+        setDadosBrutos(dadosOff);
+        processarDadosMapa(dadosOff);
+        alertaHibrido("Offline", "Mostrando dados salvos no dispositivo.");
       } else {
+        alertaHibrido("Offline", "Nenhum dado encontrado no dispositivo para este filtro.");
         setDadosBrutos([]);
         processarDadosMapa([]);
       }
@@ -335,27 +394,26 @@ export default function MapaScreen() {
   const processarDadosMapa = (data: any[]) => {
     let somaGeral = 0;
     const agrupamento: any = {};
-    const limpar = (txt: string) => txt ? txt.trim().replace(/\s+/g, ' ').toUpperCase() : 'N/A';
 
     const dadosOrdenados = [...data].sort((a, b) => {
-      const fazA = limpar(a.fazenda);
-      const fazB = limpar(b.fazenda);
+      const fazA = limparVisual(a.fazenda);
+      const fazB = limparVisual(b.fazenda);
       if (fazA !== fazB) return fazA.localeCompare(fazB);
 
-      const qdrA = limpar(a.quadra);
-      const qdrB = limpar(b.quadra);
+      const qdrA = limparVisual(a.quadra);
+      const qdrB = limparVisual(b.quadra);
       if (qdrA !== qdrB) return qdrA.localeCompare(qdrB, undefined, { numeric: true });
 
-      const ramA = limpar(a.ramal);
-      const ramB = limpar(b.ramal);
+      const ramA = limparVisual(a.ramal);
+      const ramB = limparVisual(b.ramal);
       return ramA.localeCompare(ramB, undefined, { numeric: true });
     });
 
     dadosOrdenados.forEach((item) => {
-      const qtd = item.total_pes || 0;
+      const qtd = Number(item.total_pes) || 0;
       somaGeral += qtd;
-      const faz = limpar(item.fazenda);
-      const qdr = limpar(item.quadra);
+      const faz = limparVisual(item.fazenda);
+      const qdr = limparVisual(item.quadra);
 
       if (!agrupamento[faz]) agrupamento[faz] = { total: 0, quadras: {} };
       agrupamento[faz].total += qtd;
@@ -479,7 +537,7 @@ export default function MapaScreen() {
             </div>
 
             <div class="resumo-filtros">
-              <strong>Filtro Aplicado:</strong> Fazenda: ${buscaFazenda || 'N/A'} | Quadra: ${buscaQuadra || 'N/A'}
+              <strong>Filtro Aplicado:</strong> Fazenda: ${buscaFazenda || 'N/A'} | Quadra: ${buscaQuadra || 'Todas'} | Ramal: ${buscaRamal || 'Todos'}
             </div>
 
             <div class="cards">
@@ -518,47 +576,61 @@ export default function MapaScreen() {
 
   const abrirModalEdicao = useCallback((ramal: any) => {
     setEditServico(ramal.servico);
-    setEditQtd(ramal.total.toString());
+    setEditQtd(String(ramal.total || 0));
     setRamalEditando(ramal);
   }, []);
 
-  const handleAtualizar = async (id: number, campo: string, valor: any) => {
-    setCarregando(true);
-    const { error } = await supabase.from('mapa_fazendas').update({ [campo]: valor }).eq('id', id);
-    if (error) {
-      alertaHibrido("Erro", "Falha ao atualizar o dado.");
-    } else {
-      const novaListaBruta = dadosBrutos.map(item => item.id === id ? { ...item, [campo]: valor } : item);
-      setDadosBrutos(novaListaBruta);
-      processarDadosMapa(novaListaBruta);
-      
-      carregarDicionarioEServicos(isAdmin, fazendasPermitidas);
-    }
-    setCarregando(false);
-  };
-
-  const salvarEdicao = () => {
+  // 🟢 CORREÇÃO DEFINITIVA: Atualiza Serviço e Quantidade juntos em uma única operação no banco
+  const salvarEdicao = async () => {
     if (isOffline) {
       return alertaHibrido("⚠️ Sem Internet", "Não é possível alterar no modo offline.");
     }
-    
-    const novoTotal = parseInt(editQtd) || 0;
-    let atualizouAlgo = false;
+    if (!ramalEditando) return;
 
-    if (editServico !== ramalEditando.servico) {
-      handleAtualizar(ramalEditando.id, 'servico_permitido', editServico);
-      atualizouAlgo = true;
-    }
-    
-    if (novoTotal !== ramalEditando.total) {
-      handleAtualizar(ramalEditando.id, 'total_pes', novoTotal);
-      atualizouAlgo = true;
-    }
-    
-    if (!atualizouAlgo) {
+    const novoTotal = parseInt(editQtd, 10) || 0;
+    const servicoParaBanco = editServico === 'Não Definido' ? null : editServico;
+
+    if (editServico === ramalEditando.servico && novoTotal === ramalEditando.total) {
       setRamalEditando(null);
-    } else {
+      return;
+    }
+
+    setSalvandoModal(true);
+    try {
+      const { error } = await supabase
+        .from('mapa_fazendas')
+        .update({
+          servico_permitido: servicoParaBanco,
+          total_pes: novoTotal
+        })
+        .eq('id', ramalEditando.id);
+
+      if (error) throw error;
+
+      // Atualiza a lista na tela imediatamente sem conflito de estado
+      const novaListaBruta = dadosBrutos.map(item =>
+        item.id === ramalEditando.id
+          ? { ...item, servico_permitido: servicoParaBanco, total_pes: novoTotal }
+          : item
+      );
+      setDadosBrutos(novaListaBruta);
+      processarDadosMapa(novaListaBruta);
+
+      // Atualiza também o cache geral e o resumo
+      const novoCacheCompleto = mapaCompletoCache.map(item =>
+        item.id === ramalEditando.id
+          ? { ...item, servico_permitido: servicoParaBanco, total_pes: novoTotal }
+          : item
+      );
+      setMapaCompletoCache(novoCacheCompleto);
+      montarDicionario(novoCacheCompleto, isAdmin, fazendasPermitidas);
+      await AsyncStorage.setItem('@mochila_dicionario_mapa', JSON.stringify(novoCacheCompleto));
+
       setRamalEditando(null);
+    } catch (e) {
+      alertaHibrido("Erro", "Falha ao atualizar os dados do ramal.");
+    } finally {
+      setSalvandoModal(false);
     }
   };
 
@@ -567,7 +639,7 @@ export default function MapaScreen() {
       return alertaHibrido("⚠️ Sem Internet", "Não é possível excluir no modo offline.");
     }
 
-    const mensagem = `Tem certeza que deseja EXCLUIR DEFINITIVAMENTE o Ramal ${ramalEditando.ramal}? Esta ação não pode ser desfeita.`;
+    const mensagem = `Tem certeza que deseja EXCLUIR DEFINITIVAMENTE o Ramal ${ramalEditando.ramal} (${ramalEditando.servico})? Esta ação não pode ser desfeita.`;
 
     if (Platform.OS === 'web') {
       const confirmado = window.confirm(`⚠️ ATENÇÃO!\n\n${mensagem}`);
@@ -585,18 +657,26 @@ export default function MapaScreen() {
   };
 
   const excluirRamalDb = async (id: number) => {
-    setCarregando(true);
-    const { error } = await supabase.from('mapa_fazendas').delete().eq('id', id);
-    if (error) {
-      alertaHibrido("Erro", "Falha ao excluir o ramal. Verifique sua conexão.");
-    } else {
+    setSalvandoModal(true);
+    try {
+      const { error } = await supabase.from('mapa_fazendas').delete().eq('id', id);
+      if (error) throw error;
+
       const novaListaBruta = dadosBrutos.filter(item => item.id !== id);
       setDadosBrutos(novaListaBruta);
       processarDadosMapa(novaListaBruta);
-      carregarDicionarioEServicos(isAdmin, fazendasPermitidas);
+
+      const novoCacheCompleto = mapaCompletoCache.filter(item => item.id !== id);
+      setMapaCompletoCache(novoCacheCompleto);
+      montarDicionario(novoCacheCompleto, isAdmin, fazendasPermitidas);
+      await AsyncStorage.setItem('@mochila_dicionario_mapa', JSON.stringify(novoCacheCompleto));
+
       setRamalEditando(null);
+    } catch (e) {
+      alertaHibrido("Erro", "Falha ao excluir o ramal. Verifique sua conexão.");
+    } finally {
+      setSalvandoModal(false);
     }
-    setCarregando(false);
   };
 
   const renderItem = useCallback(({ item }: any) => {
@@ -616,7 +696,7 @@ export default function MapaScreen() {
     <View style={styles.container}>
       {isOffline && (
         <View style={styles.offlineBadge}>
-          <Text style={styles.offlineText}>⚠️ MODO OFFLINE ATIVADO - Usando dados salvos no tablet.</Text>
+          <Text style={styles.offlineText}>⚠️ MODO OFFLINE ATIVADO - Usando dados salvos no dispositivo.</Text>
         </View>
       )}
 
@@ -762,16 +842,16 @@ export default function MapaScreen() {
             />
 
             <View style={styles.modalActionsCol}>
-              <TouchableOpacity style={styles.btnModalSalvar} onPress={salvarEdicao}>
-                <Text style={styles.btnModalTexto}>💾 Salvar Alterações</Text>
+              <TouchableOpacity style={styles.btnModalSalvar} onPress={salvarEdicao} disabled={salvandoModal}>
+                {salvandoModal ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnModalTexto}>💾 Salvar Alterações</Text>}
               </TouchableOpacity>
 
               <View style={styles.row}>
-                <TouchableOpacity style={styles.btnModalCancelar} onPress={() => setRamalEditando(null)}>
+                <TouchableOpacity style={styles.btnModalCancelar} onPress={() => setRamalEditando(null)} disabled={salvandoModal}>
                   <Text style={styles.btnModalTextoCinzento}>Cancelar</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.btnModalExcluir} onPress={confirmarExclusao}>
+                <TouchableOpacity style={styles.btnModalExcluir} onPress={confirmarExclusao} disabled={salvandoModal}>
                   <Text style={styles.btnModalTexto}>🗑️ Excluir Ramal</Text>
                 </TouchableOpacity>
               </View>

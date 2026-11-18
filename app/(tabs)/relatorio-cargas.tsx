@@ -7,6 +7,73 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
+// =========================================================================
+// 🟢 BUSCA PAGINADA COM SELECT('*') (Evita erro de colunas inexistentes)
+// =========================================================================
+const buscarTodasAsLinhas = async (tabela: string) => {
+  let todosOsDados: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from(tabela)
+      .select('*')
+      .order('id', { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) {
+      console.error(`Erro ao buscar ${tabela}:`, error);
+      throw error;
+    }
+
+    if (data && data.length > 0) {
+      todosOsDados = [...todosOsDados, ...data];
+      if (data.length < limite) {
+        buscando = false;
+      } else {
+        inicio += limite;
+      }
+    } else {
+      buscando = false;
+    }
+  }
+  return todosOsDados;
+};
+
+// 🟢 ARREDONDAMENTO LIMPO (Impede números como 95.00999999999999)
+const arredondar = (num: any): number => {
+  const n = Number(num) || 0;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+};
+
+// 🟢 FORMATAÇÃO VISUAL (Ex: 86.1 vira 86,1 | 1005 vira 1.005)
+const formatarQtd = (num: any): string => {
+  if (num === '-' || num === '"' || num === null || num === undefined) return String(num || '-');
+  const n = arredondar(num);
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
+
+const normalizarTexto = (txt: any): string => {
+  if (!txt) return '';
+  return String(txt)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .trim();
+};
+
+// 🟢 PADRONIZA O NOME DA FAZENDA (Remove "FAZENDA " duplicado e acentos divergentes)
+const normalizarNomeFazenda = (nome: any): string => {
+  if (!nome) return 'NAO INFORMADA';
+  return normalizarTexto(nome)
+    .replace(/^FAZENDA\s+/i, '')
+    .replace(/^FAZ\.?\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
 export default function RelatorioCargasScreen() {
   const [fazendaSelecionada, setFazendaSelecionada] = useState('TODAS');
   const [tipoCargaSelecionado, setTipoCargaSelecionado] = useState('TODAS'); 
@@ -60,17 +127,18 @@ export default function RelatorioCargasScreen() {
 
   const extrairDataLocal = (dt: string) => {
     if (!dt) return null;
-    if (dt.includes('/')) {
-      const parts = dt.split(' ')[0].split('/');
-      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    const limpa = String(dt).trim();
+    if (limpa.includes('/')) {
+      const parts = limpa.split(' ')[0].split('/');
+      if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
     }
-    return dt.substring(0, 10);
+    return limpa.substring(0, 10);
   };
 
   const carregarFazendas = async () => {
     const { data } = await supabase.from('mapa_fazendas').select('fazenda');
     if (data) {
-      const unicas = [...new Set(data.map(item => item.fazenda?.toUpperCase()).filter(Boolean))].sort();
+      const unicas = [...new Set(data.map(item => normalizarNomeFazenda(item.fazenda)).filter(Boolean))].sort();
       setListaFazendas(unicas as string[]);
     }
   };
@@ -83,130 +151,150 @@ export default function RelatorioCargasScreen() {
 
     setCarregando(true);
     try {
-      let queryCargas = supabase
-        .from('carregamentos') 
-        .select('*')
-        .gte('data_saida', `${dataIniBD} 00:00:00`) 
-        .lte('data_saida', `${dataFimBD} 23:59:59`);
-
-      let queryDiarios = supabase
-        .from('diarios_campo') 
-        .select('data, quadra, servico, quantidade, fazenda')
-        .gte('data', `${dataIniBD} 00:00:00`)
-        .lte('data', `${dataFimBD} 23:59:59`);
-        
-      if (fazendaSelecionada !== 'TODAS') {
-        queryCargas = queryCargas.ilike('fazenda', `%${fazendaSelecionada}%`);
-        queryDiarios = queryDiarios.ilike('fazenda', `%${fazendaSelecionada}%`);
-      }
-      if (tipoCargaSelecionado !== 'TODAS') {
-        queryCargas = queryCargas.eq('tipo_carga', tipoCargaSelecionado);
-      }
-
-      // 1️⃣ FAZ TODAS AS BUSCAS AO MESMO TEMPO (Incluindo o passado para o Estoque Inicial)
+      // 1️⃣ BUSCA PAGINADA COMPLETA DE TODAS AS TABELAS USANDO '*'
       const [
-        { data: dataCargas, error: errCargas },
-        { data: dataDiarios, error: errDiarios },
-        { data: pastEstoqueAnt },
-        { data: pastCargas },
-        { data: pastDiarios },
-        { data: pastBaixas }
+        todosCarregamentos,
+        todosDiarios,
+        todosEstoqueAnt,
+        todasBaixas
       ] = await Promise.all([
-        queryCargas,
-        queryDiarios,
-        supabase.from('estoque_anterior').select('quantidade, fazenda'),
-        supabase.from('carregamentos').select('quantidade, fazenda, tipo_carga').lt('data_saida', `${dataIniBD} 00:00:00`),
-        supabase.from('diarios_campo').select('quantidade, fazenda, servico').lt('data', `${dataIniBD} 00:00:00`),
-        supabase.from('baixas_estoque').select('quantidade, fazenda').lt('created_at', `${dataIniBD} 00:00:00`)
+        buscarTodasAsLinhas('carregamentos'),
+        buscarTodasAsLinhas('diarios_campo'),
+        buscarTodasAsLinhas('estoque_anterior'),
+        buscarTodasAsLinhas('baixas_estoque')
       ]);
-      
-      if (errCargas) throw new Error(`Erro em Carregamentos: ${errCargas.message}`);
-      if (errDiarios) throw new Error(`Erro em Diários: ${errDiarios.message}`);
 
-      // 2️⃣ CÁLCULO DO ESTOQUE ANTERIOR (Saldo Inicial no dia 01 do Filtro)
-      const saldoInicialPorFazenda: any = {};
+      const fazendaFiltroNorm = fazendaSelecionada !== 'TODAS' ? normalizarNomeFazenda(fazendaSelecionada) : 'TODAS';
 
-      pastEstoqueAnt?.forEach(item => {
-        const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
-        saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) + (Number(item.quantidade) || 0);
+      // 2️⃣ CÁLCULO DO ESTOQUE ANTERIOR (Tudo antes de dataIniBD) + BAIXAS DO PERÍODO
+      const saldoInicialPorFazenda: Record<string, number> = {};
+      const baixasPorFazendaDia: Record<string, Record<string, number>> = {};
+
+      todosEstoqueAnt.forEach(item => {
+        const f = normalizarNomeFazenda(item.fazenda);
+        if (fazendaFiltroNorm !== 'TODAS' && f !== fazendaFiltroNorm) return;
+        saldoInicialPorFazenda[f] = arredondar((saldoInicialPorFazenda[f] || 0) + (Number(item.quantidade) || 0));
       });
 
-      pastDiarios?.forEach(item => {
-        const srv = String(item.servico || '').toUpperCase();
-        if (srv.includes('COLETA')) {
-          const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
-          saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) + (Number(item.quantidade) || 0);
+      todasBaixas.forEach(item => {
+        const f = normalizarNomeFazenda(item.fazenda);
+        if (fazendaFiltroNorm !== 'TODAS' && f !== fazendaFiltroNorm) return;
+        const dt = extrairDataLocal(item.created_at || item.data);
+        const qtd = arredondar(item.quantidade);
+
+        if (dt && dt < dataIniBD) {
+          saldoInicialPorFazenda[f] = arredondar((saldoInicialPorFazenda[f] || 0) - qtd);
+        } else if (dt && dt >= dataIniBD && dt <= dataFimBD) {
+          if (!baixasPorFazendaDia[f]) baixasPorFazendaDia[f] = {};
+          baixasPorFazendaDia[f][dt] = arredondar((baixasPorFazendaDia[f][dt] || 0) + qtd);
         }
       });
 
-      pastCargas?.forEach(item => {
-        if (item.tipo_carga !== 'Madeira') {
-          const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
-          saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) - (Number(item.quantidade) || 0);
-        }
-      });
-
-      pastBaixas?.forEach(item => {
-        const f = (item.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
-        saldoInicialPorFazenda[f] = (saldoInicialPorFazenda[f] || 0) - (Number(item.quantidade) || 0);
-      });
-
-      // 3️⃣ MAPEIA TUDO DO PERÍODO POR DIA E FAZENDA
+      // 3️⃣ SEPARA DIÁRIOS E CARGAS ENTRE PASSADO (< dataIniBD) E PERÍODO ATUAL
       const mapaFazendas: any = {};
 
-      if (dataDiarios) {
-        dataDiarios.forEach(d => {
-          const srv = String(d.servico || '').toUpperCase();
-          const isColeta = srv.includes('COLETA'); 
-          const isRemocao = srv.includes('REMOÇÃO') || srv.includes('REMOCAO'); 
-          
-          if (!isColeta && !isRemocao) return; 
+      todosDiarios.forEach(d => {
+        const f = normalizarNomeFazenda(d.fazenda);
+        if (fazendaFiltroNorm !== 'TODAS' && f !== fazendaFiltroNorm) return;
 
-          const dt = extrairDataLocal(d.data);
-          if (!dt) return;
+        const srv = normalizarTexto(d.servico);
+        const colab = normalizarTexto(d.colaborador);
+        const isColeta = srv.includes('COLETA') && !srv.includes('PREPARO') && !srv.includes('LIMPEZA');
+        const isRemocao = srv.includes('REMO') || colab.includes('REMOCAO');
 
-          const f = (d.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+        if (!isColeta && !isRemocao) return;
+
+        const dt = extrairDataLocal(d.data || d.created_at);
+        if (!dt) return;
+
+        const qtd = arredondar(d.quantidade);
+
+        if (dt < dataIniBD) {
+          if (isColeta) {
+            saldoInicialPorFazenda[f] = arredondar((saldoInicialPorFazenda[f] || 0) + qtd);
+          }
+        } else if (dt >= dataIniBD && dt <= dataFimBD) {
           if (!mapaFazendas[f]) mapaFazendas[f] = {};
-          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set(), totalColeta: 0, totalRemocao: 0, cargas: [] };
+          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set<string>(), totalColeta: 0, totalRemocao: 0, cargas: [] };
 
-          if (d.quadra) mapaFazendas[f][dt].quadras.add(String(d.quadra));
-          if (isColeta && d.quantidade) mapaFazendas[f][dt].totalColeta += Number(d.quantidade);
-          if (isRemocao && d.quantidade) mapaFazendas[f][dt].totalRemocao += Number(d.quantidade);
-        });
-      }
+          // 🟢 DESMEMBRA QUADRAS (Impede textos duplicados como "11, 17, 20 / 11 / 17 / 20")
+          if (d.quadra && String(d.quadra).trim() !== '-') {
+            String(d.quadra)
+              .split(/[,/]+/)
+              .map(q => q.trim())
+              .filter(q => q && q !== '-')
+              .forEach(q => mapaFazendas[f][dt].quadras.add(q));
+          }
 
-      if (dataCargas) {
-        dataCargas.forEach(c => {
-          const dt = extrairDataLocal(c.data_saida);
-          if (!dt) return;
+          if (isColeta && qtd > 0) {
+            mapaFazendas[f][dt].totalColeta = arredondar(mapaFazendas[f][dt].totalColeta + qtd);
+          }
+          if (isRemocao && qtd > 0) {
+            mapaFazendas[f][dt].totalRemocao = arredondar(mapaFazendas[f][dt].totalRemocao + qtd);
+          }
+        }
+      });
 
-          const f = (c.fazenda || 'NÃO INFORMADA').trim().toUpperCase();
+      todosCarregamentos.forEach(c => {
+        const f = normalizarNomeFazenda(c.fazenda);
+        if (fazendaFiltroNorm !== 'TODAS' && f !== fazendaFiltroNorm) return;
+
+        const dt = extrairDataLocal(c.data_saida || c.data || c.created_at);
+        if (!dt) return;
+
+        const isMadeira = normalizarTexto(c.tipo_carga).includes('MADEIRA');
+        const qtd = arredondar(c.quantidade);
+
+        if (dt < dataIniBD) {
+          if (!isMadeira) {
+            saldoInicialPorFazenda[f] = arredondar((saldoInicialPorFazenda[f] || 0) - qtd);
+          }
+        } else if (dt >= dataIniBD && dt <= dataFimBD) {
+          if (tipoCargaSelecionado !== 'TODAS' && c.tipo_carga !== tipoCargaSelecionado) return;
+
           if (!mapaFazendas[f]) mapaFazendas[f] = {};
-          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set(), totalColeta: 0, totalRemocao: 0, cargas: [] };
+          if (!mapaFazendas[f][dt]) mapaFazendas[f][dt] = { quadras: new Set<string>(), totalColeta: 0, totalRemocao: 0, cargas: [] };
 
           mapaFazendas[f][dt].cargas.push(c);
-        });
-      }
+        }
+      });
 
-      // 4️⃣ GERA A LISTA CRONOLÓGICA (COM O CÁLCULO DE ESTOQUE)
+      // 4️⃣ GERA A LISTA CRONOLÓGICA COM SALDO ARREDONDADO E QUADRAS LIMPAS
       const agrupamento: any = {};
       let tPeso = 0; let tTambores = 0; let tCargas = 0; let tVolume = 0;
 
       Object.keys(mapaFazendas).forEach(faz => {
-        agrupamento[faz] = { linhas: [], total_peso: 0, total_tambores: 0, total_volume: 0, total_coleta: 0 };
+        agrupamento[faz] = { 
+          linhas: [], 
+          total_peso: 0, 
+          total_tambores: 0, 
+          total_volume: 0, 
+          total_coleta: 0,
+          total_remocao: 0,
+          saldo_inicial: arredondar(saldoInicialPorFazenda[faz] || 0)
+        };
         
-        let saldoAtual = saldoInicialPorFazenda[faz] || 0; // Puxa o saldo do passado
+        let saldoAtual = arredondar(saldoInicialPorFazenda[faz] || 0);
         const datas = Object.keys(mapaFazendas[faz]).sort();
 
         datas.forEach(dt => {
           const diaInfo = mapaFazendas[faz][dt];
-          const quadraStr = diaInfo.quadras.size > 0 ? Array.from(diaInfo.quadras).join(' / ') : '-';
-          const coletaStr = diaInfo.totalColeta > 0 ? diaInfo.totalColeta.toString() : '-';
-          const remocaoStr = diaInfo.totalRemocao > 0 ? diaInfo.totalRemocao.toString() : '-';
+          
+          const quadrasOrdenadas = Array.from(diaInfo.quadras as Set<string>).sort((a, b) => 
+            a.localeCompare(b, undefined, { numeric: true })
+          );
+          const quadraStr = quadrasOrdenadas.length > 0 ? quadrasOrdenadas.join(' / ') : '-';
+          
+          const coletaVal = arredondar(diaInfo.totalColeta);
+          const remocaoVal = arredondar(diaInfo.totalRemocao);
+          const baixaDia = baixasPorFazendaDia[faz]?.[dt] || 0;
 
-          // A coleta entra no estoque do dia
-          saldoAtual += diaInfo.totalColeta;
-          agrupamento[faz].total_coleta += diaInfo.totalColeta;
+          const coletaStr = coletaVal > 0 ? formatarQtd(coletaVal) : '-';
+          const remocaoStr = remocaoVal > 0 ? formatarQtd(remocaoVal) : '-';
+
+          saldoAtual = arredondar(saldoAtual + coletaVal - baixaDia);
+          agrupamento[faz].total_coleta = arredondar(agrupamento[faz].total_coleta + coletaVal);
+          agrupamento[faz].total_remocao = arredondar(agrupamento[faz].total_remocao + remocaoVal);
 
           if (diaInfo.cargas.length === 0) {
             agrupamento[faz].linhas.push({
@@ -215,7 +303,7 @@ export default function RelatorioCargasScreen() {
               coleta: coletaStr,
               remocao: remocaoStr,
               carregamento_qtd: '-',
-              estoque: saldoAtual, // Estoque atualizado!
+              estoque: formatarQtd(saldoAtual < 0 ? 0 : Math.round(saldoAtual)),
               romaneio: '-',
               tipo_carga: '-',
               variedade: '-',
@@ -226,37 +314,37 @@ export default function RelatorioCargasScreen() {
             });
           } else {
             diaInfo.cargas.forEach((c: any, index: number) => {
-              const isMadeira = c.tipo_carga === 'Madeira';
-              const peso = Number(c.peso_liquido) || 0;
-              const tambores = isMadeira ? 0 : (Number(c.quantidade) || 0);
-              const volume = Number(c.madeira_volume) || 0;
+              const isMadeira = normalizarTexto(c.tipo_carga).includes('MADEIRA');
+              const peso = arredondar(c.peso_liquido || c.peso || 0);
+              const tambores = isMadeira ? 0 : arredondar(c.quantidade || 0);
+              const volume = arredondar(c.madeira_volume || 0);
 
-              // O Carregamento sai do estoque (apenas Goma Resina)
-              saldoAtual -= tambores;
+              saldoAtual = arredondar(saldoAtual - tambores);
+              const estoqueExibicao = saldoAtual < 0 ? 0 : Math.round(saldoAtual);
 
               agrupamento[faz].linhas.push({
                 data: dt,
                 quadra: index === 0 ? quadraStr : '"',
                 coleta: index === 0 ? coletaStr : '"', 
                 remocao: index === 0 ? remocaoStr : '"',
-                carregamento_qtd: isMadeira ? '-' : (tambores || '-'),
-                estoque: isMadeira ? '-' : saldoAtual, // Estoque atualizado após a carga!
-                romaneio: c.numero_romaneio || '-',
+                carregamento_qtd: isMadeira ? '-' : (tambores > 0 ? formatarQtd(tambores) : '-'),
+                estoque: isMadeira ? '-' : formatarQtd(estoqueExibicao),
+                romaneio: c.numero_romaneio || c.romaneio || '-',
                 tipo_carga: c.tipo_carga || 'Goma Resina',
                 variedade: c.variedade || '-',
                 peso: peso,
                 tambores: tambores,
                 volume: volume,
-                media_tambor: tambores > 0 ? peso / tambores : 0
+                media_tambor: tambores > 0 ? arredondar(peso / tambores) : 0
               });
 
-              agrupamento[faz].total_peso += peso;
-              agrupamento[faz].total_tambores += tambores;
-              agrupamento[faz].total_volume += volume;
+              agrupamento[faz].total_peso = arredondar(agrupamento[faz].total_peso + peso);
+              agrupamento[faz].total_tambores = arredondar(agrupamento[faz].total_tambores + tambores);
+              agrupamento[faz].total_volume = arredondar(agrupamento[faz].total_volume + volume);
               
-              tPeso += peso;
-              tTambores += tambores;
-              tVolume += volume;
+              tPeso = arredondar(tPeso + peso);
+              tTambores = arredondar(tTambores + tambores);
+              tVolume = arredondar(tVolume + volume);
               tCargas++;
             });
           }
@@ -305,21 +393,21 @@ export default function RelatorioCargasScreen() {
       Object.keys(dadosAgrupados).sort().forEach(fazenda => {
         const dados = dadosAgrupados[fazenda];
 
-        const linhasComCarga = dados.linhas.filter((c:any) => c.tipo_carga !== '-' && c.tipo_carga !== 'Madeira');
+        const linhasComCarga = dados.linhas.filter((c: any) => c.tipo_carga !== '-' && !normalizarTexto(c.tipo_carga).includes('MADEIRA'));
         const totalPesoResina = linhasComCarga.reduce((acc: number, curr: any) => acc + curr.peso, 0);
         const mediaCarga = linhasComCarga.length > 0 ? (totalPesoResina / linhasComCarga.length) : 0;
 
         let linhasTabela = '';
         dados.linhas.forEach((c: any) => {
           const dtBr = c.data !== '-' ? `${c.data.split('-')[2]}/${c.data.split('-')[1]}/${c.data.split('-')[0]}` : '-';
-          const isMadeira = c.tipo_carga === 'Madeira';
+          const isMadeira = normalizarTexto(c.tipo_carga).includes('MADEIRA');
           const isVazio = c.tipo_carga === '-';
             
           const infoTotal = isVazio 
             ? `<td>-</td>` 
             : (isMadeira 
                 ? `<td style="color: #8E44AD; font-weight: bold;">${c.volume.toFixed(2).replace('.', ',')} st</td>`
-                : `<td style="color: #E67E22; font-weight: bold;">${c.peso.toLocaleString('pt-BR')} kg</td>`);
+                : `<td style="color: #E67E22; font-weight: bold;">${c.peso > 0 ? `${c.peso.toLocaleString('pt-BR')} kg` : '-'}</td>`);
 
           linhasTabela += `
             <tr>
@@ -340,9 +428,11 @@ export default function RelatorioCargasScreen() {
             <div class="fazenda-header">
               <h2>📍 FAZENDA ${fazenda}</h2>
               <div class="fazenda-resumo">
-                <span><strong>Tot. Coleta:</strong> <span style="color:#2980B9;">${dados.total_coleta}</span></span> | 
+                <span><strong>Saldo Inicial:</strong> ${formatarQtd(dados.saldo_inicial)}</span> | 
+                <span><strong>Tot. Coleta:</strong> <span style="color:#2980B9;">${formatarQtd(dados.total_coleta)}</span></span> | 
+                <span><strong>Tot. Remoção:</strong> <span style="color:#8E44AD;">${formatarQtd(dados.total_remocao)}</span></span> | 
                 <span><strong>Cargas:</strong> ${linhasComCarga.length}</span> | 
-                <span><strong>Tambores Exp:</strong> ${dados.total_tambores}</span> | 
+                <span><strong>Tambores Exp:</strong> ${formatarQtd(dados.total_tambores)}</span> | 
                 <span><strong>Peso Exp:</strong> <span style="color:#27AE60;">${dados.total_peso.toLocaleString('pt-BR')} kg</span></span> | 
                 <span><strong>Média/Carga:</strong> ${mediaCarga.toFixed(2).replace('.', ',')} kg</span>
               </div>
@@ -350,14 +440,14 @@ export default function RelatorioCargasScreen() {
             <table>
               <thead>
                 <tr>
-                  <th style="width:10%">Data</th>
-                  <th style="width:12%">Quadra</th>
+                  <th style="width:11%">Data</th>
+                  <th style="width:14%">Quadra</th>
                   <th style="width:10%">Coleta</th>
                   <th style="width:10%">Remoção</th>
-                  <th style="width:14%">Carregamento</th>
+                  <th style="width:13%">Carregamento</th>
                   <th style="width:10%">Estoque</th>
-                  <th style="width:16%">Nº Romaneio</th>
-                  <th style="width:18%">Tot (Kg/st)</th>
+                  <th style="width:15%">Nº Romaneio</th>
+                  <th style="width:17%">Tot (Kg/st)</th>
                 </tr>
               </thead>
               <tbody>
@@ -416,7 +506,7 @@ export default function RelatorioCargasScreen() {
               </div>
               <div class="resumo-global-box">
                 <div class="resumo-global-titulo">Tambores Exp.</div>
-                <div class="resumo-global-valor">${totalTamboresGeral}</div>
+                <div class="resumo-global-valor">${formatarQtd(totalTamboresGeral)}</div>
               </div>
               <div class="resumo-global-box">
                 <div class="resumo-global-titulo">Média (Kg/Carga)</div>
@@ -463,7 +553,7 @@ export default function RelatorioCargasScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Diário de Cargas 🚛</Text>
-        <Text style={styles.subtitle}>Controle Cronológico - Coleta e Exportação</Text>
+        <Text style={styles.subtitle}>Controle Cronológico - Coleta, Remoção e Exportação</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
@@ -532,7 +622,7 @@ export default function RelatorioCargasScreen() {
             </View>
             <View style={styles.resumoBox}>
               <Text style={styles.resumoTitulo}>Total Tambores</Text>
-              <Text style={styles.resumoValorLaranja}>{totalTamboresGeral}</Text>
+              <Text style={styles.resumoValorLaranja}>{formatarQtd(totalTamboresGeral)}</Text>
             </View>
             <View style={styles.resumoBox}>
               <Text style={styles.resumoTitulo}>Média / Carga</Text>
@@ -572,7 +662,7 @@ export default function RelatorioCargasScreen() {
             Object.keys(dadosAgrupados).sort().map(fazenda => {
               const dados = dadosAgrupados[fazenda];
               
-              const linhasComCarga = dados.linhas.filter((c:any) => c.tipo_carga !== '-' && c.tipo_carga !== 'Madeira');
+              const linhasComCarga = dados.linhas.filter((c: any) => c.tipo_carga !== '-' && !normalizarTexto(c.tipo_carga).includes('MADEIRA'));
               const mediaFazenda = linhasComCarga.length > 0 ? (linhasComCarga.reduce((acc: number, curr: any) => acc + curr.peso, 0) / linhasComCarga.length) : 0;
 
               return (
@@ -581,52 +671,80 @@ export default function RelatorioCargasScreen() {
                   <View style={styles.headerFazenda}>
                     <Text style={styles.tituloFazenda}>📍 FAZENDA {fazenda}</Text>
                     <View style={styles.tagsFazendaContainer}>
-                       {dados.total_coleta > 0 && <View style={[styles.tagFazenda, {borderColor: '#2980B9'}]}><Text style={[styles.tagTextoFazenda, {color: '#2980B9'}]}>{dados.total_coleta} Coletas</Text></View>}
-                       {linhasComCarga.length > 0 && <View style={styles.tagFazenda}><Text style={styles.tagTextoFazenda}>{linhasComCarga.length} Cargas</Text></View>}
-                       {dados.total_tambores > 0 && <View style={styles.tagFazenda}><Text style={styles.tagTextoFazenda}>{dados.total_tambores} Tbs</Text></View>}
-                       {dados.total_peso > 0 && <View style={[styles.tagFazenda, {backgroundColor: '#27AE60'}]}><Text style={[styles.tagTextoFazenda, {color: '#FFF'}]}>{dados.total_peso.toLocaleString('pt-BR')} KG</Text></View>}
-                       {dados.total_volume > 0 && <View style={[styles.tagFazenda, {backgroundColor: '#8E44AD'}]}><Text style={[styles.tagTextoFazenda, {color: '#FFF'}]}>{dados.total_volume.toFixed(2).replace('.', ',')} st</Text></View>}
+                      <View style={[styles.tagFazenda, { borderColor: '#7F8C8D' }]}>
+                        <Text style={[styles.tagTextoFazenda, { color: '#7F8C8D' }]}>Saldo Ant: {formatarQtd(dados.saldo_inicial)}</Text>
+                      </View>
+                      {dados.total_coleta > 0 && (
+                        <View style={[styles.tagFazenda, { borderColor: '#2980B9', backgroundColor: '#EBF5FB' }]}>
+                          <Text style={[styles.tagTextoFazenda, { color: '#2980B9' }]}>{formatarQtd(dados.total_coleta)} Coletas</Text>
+                        </View>
+                      )}
+                      {dados.total_remocao > 0 && (
+                        <View style={[styles.tagFazenda, { borderColor: '#8E44AD', backgroundColor: '#F5EEF8' }]}>
+                          <Text style={[styles.tagTextoFazenda, { color: '#8E44AD' }]}>{formatarQtd(dados.total_remocao)} Removidos</Text>
+                        </View>
+                      )}
+                      {linhasComCarga.length > 0 && (
+                        <View style={styles.tagFazenda}>
+                          <Text style={styles.tagTextoFazenda}>{linhasComCarga.length} Cargas</Text>
+                        </View>
+                      )}
+                      {dados.total_tambores > 0 && (
+                        <View style={[styles.tagFazenda, { borderColor: '#E67E22', backgroundColor: '#FEF5E7' }]}>
+                          <Text style={[styles.tagTextoFazenda, { color: '#D35400' }]}>{formatarQtd(dados.total_tambores)} Tbs Exp.</Text>
+                        </View>
+                      )}
+                      {dados.total_peso > 0 && (
+                        <View style={[styles.tagFazenda, { backgroundColor: '#27AE60' }]}>
+                          <Text style={[styles.tagTextoFazenda, { color: '#FFF' }]}>{dados.total_peso.toLocaleString('pt-BR')} KG</Text>
+                        </View>
+                      )}
+                      {dados.total_volume > 0 && (
+                        <View style={[styles.tagFazenda, { backgroundColor: '#8E44AD' }]}>
+                          <Text style={[styles.tagTextoFazenda, { color: '#FFF' }]}>{dados.total_volume.toFixed(2).replace('.', ',')} st</Text>
+                        </View>
+                      )}
                     </View>
                   </View>
 
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <View style={{ minWidth: 650 }}> 
+                  <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                    <View style={{ minWidth: 680 }}> 
                       <View style={styles.tableHeader}>
-                        <Text style={[styles.th, { width: 75 }]}>Data</Text>
-                        <Text style={[styles.th, { width: 50 }]}>Quadra</Text>
-                        <Text style={[styles.th, { width: 60, textAlign: 'center' }]}>Coleta</Text>
-                        <Text style={[styles.th, { width: 65, textAlign: 'center' }]}>Remoção</Text>
+                        <Text style={[styles.th, { width: 80 }]}>Data</Text>
+                        <Text style={[styles.th, { width: 85, textAlign: 'center' }]}>Quadra</Text>
+                        <Text style={[styles.th, { width: 65, textAlign: 'center' }]}>Coleta</Text>
+                        <Text style={[styles.th, { width: 70, textAlign: 'center' }]}>Remoção</Text>
                         <Text style={[styles.th, { width: 75, textAlign: 'center' }]}>Carregam.</Text>
-                        <Text style={[styles.th, { width: 60, textAlign: 'center' }]}>Estoque</Text>
-                        <Text style={[styles.th, { width: 80 }]}>Nº Roman.</Text>
-                        <Text style={[styles.th, { width: 80, textAlign: 'center' }]}>Tot (Kg/st)</Text>
+                        <Text style={[styles.th, { width: 65, textAlign: 'center' }]}>Estoque</Text>
+                        <Text style={[styles.th, { width: 80, textAlign: 'center' }]}>Nº Roman.</Text>
+                        <Text style={[styles.th, { width: 85, textAlign: 'center' }]}>Tot (Kg/st)</Text>
                       </View>
 
                       {dados.linhas.map((c: any, index: number) => {
-                         const dtBr = c.data !== '-' ? `${c.data.split('-')[2]}/${c.data.split('-')[1]}/${c.data.split('-')[0]}` : '-';
-                         const isMadeira = c.tipo_carga === 'Madeira';
-                         const isVazio = c.tipo_carga === '-';
+                        const dtBr = c.data !== '-' ? `${c.data.split('-')[2]}/${c.data.split('-')[1]}/${c.data.split('-')[0]}` : '-';
+                        const isMadeira = normalizarTexto(c.tipo_carga).includes('MADEIRA');
+                        const isVazio = c.tipo_carga === '-';
 
-                         return (
+                        return (
                           <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
-                            <Text style={[styles.td, { width: 75 }]}>{c.quadra === '"' ? '"' : dtBr}</Text>
+                            <Text style={[styles.td, { width: 80 }]}>{c.quadra === '"' ? '"' : dtBr}</Text>
                             
-                            <Text style={[styles.td, { width: 50, fontWeight: 'bold', fontSize: 10 }]} numberOfLines={3}>{c.quadra}</Text>
-                            <Text style={[styles.td, { width: 60, textAlign: 'center', color: '#2980B9', fontWeight: 'bold', fontSize: 11 }]} numberOfLines={3}>{c.coleta}</Text>
-                            <Text style={[styles.td, { width: 65, textAlign: 'center', color: '#8E44AD', fontWeight: 'bold', fontSize: 11 }]} numberOfLines={3}>{c.remocao}</Text>
+                            <Text style={[styles.td, { width: 85, textAlign: 'center', fontWeight: 'bold', fontSize: 11 }]} numberOfLines={2}>{c.quadra}</Text>
+                            <Text style={[styles.td, { width: 65, textAlign: 'center', color: '#2980B9', fontWeight: 'bold', fontSize: 11 }]}>{c.coleta}</Text>
+                            <Text style={[styles.td, { width: 70, textAlign: 'center', color: '#8E44AD', fontWeight: 'bold', fontSize: 11 }]}>{c.remocao}</Text>
                             
                             <Text style={[styles.td, { width: 75, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : '#E67E22' }]}>
                               {c.carregamento_qtd}
                             </Text>
 
-                            <Text style={[styles.td, { width: 60, textAlign: 'center', fontWeight: 'bold', fontSize: 12, color: isVazio || c.estoque === '-' ? '#95A5A6' : '#27AE60' }]}>
+                            <Text style={[styles.td, { width: 65, textAlign: 'center', fontWeight: 'bold', fontSize: 12, color: c.estoque === '-' ? '#95A5A6' : '#27AE60' }]}>
                               {c.estoque}
                             </Text>
 
-                            <Text style={[styles.td, { width: 80, fontWeight: 'bold', color: isVazio ? '#95A5A6' : '#2C3E50' }]} numberOfLines={2}>{c.romaneio}</Text>
+                            <Text style={[styles.td, { width: 80, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : '#2C3E50' }]} numberOfLines={2}>{c.romaneio}</Text>
                             
-                            <Text style={[styles.td, { width: 80, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : (isMadeira ? '#8E44AD' : '#34495E') }]}>
-                              {isVazio ? '-' : (isMadeira ? `${c.volume.toFixed(2).replace('.', ',')} st` : `${c.peso.toLocaleString('pt-BR')} kg`)}
+                            <Text style={[styles.td, { width: 85, textAlign: 'center', fontWeight: 'bold', color: isVazio ? '#95A5A6' : (isMadeira ? '#8E44AD' : '#34495E') }]}>
+                              {isVazio ? '-' : (isMadeira ? `${c.volume.toFixed(2).replace('.', ',')} st` : (c.peso > 0 ? `${c.peso.toLocaleString('pt-BR')} kg` : '-'))}
                             </Text>
                           </View>
                         );
@@ -683,17 +801,17 @@ const styles = StyleSheet.create({
   cardFazenda: { backgroundColor: '#FFF', borderRadius: 10, elevation: 2, marginBottom: 20, overflow: 'hidden', borderWidth: 1, borderColor: '#E0E6ED' },
   headerFazenda: { padding: 12, backgroundColor: '#FDFEFE', borderBottomWidth: 1, borderBottomColor: '#EAEDED' },
   tituloFazenda: { fontSize: 14, fontWeight: 'bold', color: '#2C3E50', marginBottom: 8 },
-  tagsFazendaContainer: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  tagsFazendaContainer: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   tagFazenda: { backgroundColor: '#F4F6F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, borderWidth: 1, borderColor: '#E0E6ED' },
   tagTextoFazenda: { fontSize: 10, fontWeight: 'bold', color: '#34495E' },
   
   tableHeader: { flexDirection: 'row', backgroundColor: '#ECF0F1', paddingVertical: 10 },
-  th: { color: '#2C3E50', fontSize: 10, fontWeight: 'bold', paddingHorizontal: 10, textTransform: 'uppercase' },
+  th: { color: '#2C3E50', fontSize: 10, fontWeight: 'bold', paddingHorizontal: 8, textTransform: 'uppercase' },
   
   tableRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F2F4F4', alignItems: 'center' },
   rowEven: { backgroundColor: '#FFFFFF' },
   rowOdd: { backgroundColor: '#FAFCFC' },
-  td: { fontSize: 11, color: '#34495E', paddingHorizontal: 10 },
+  td: { fontSize: 11, color: '#34495E', paddingHorizontal: 8 },
   
   footerFazenda: { padding: 10, backgroundColor: '#FDFEFE', alignItems: 'flex-end', borderTopWidth: 1, borderTopColor: '#EAEDED' },
   textoFooterFazenda: { fontSize: 11, color: '#7F8C8D' }
