@@ -3,12 +3,81 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
-// 🟢 FUNÇÃO SEGURA PARA NÚMEROS QUEBRADOS (Decimais)
+const alertaWebMobile = (titulo: string, mensagem: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${titulo}\n\n${mensagem}`);
+  } else {
+    Alert.alert(titulo, mensagem);
+  }
+};
+
+const confirmacaoWebMobile = (titulo: string, mensagem: string, aoConfirmar: () => void) => {
+  if (Platform.OS === 'web') {
+    const confirmado = window.confirm(`${titulo}\n\n${mensagem}`);
+    if (confirmado) aoConfirmar();
+  } else {
+    Alert.alert(titulo, mensagem, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sim, Excluir', style: 'destructive', onPress: aoConfirmar }
+    ]);
+  }
+};
+
+// 🟢 FUNÇÃO SEGURA PARA NÚMEROS QUEBRADOS (0,5 / 0.5 / ,5 / 1.250,5)
 const converterParaNumero = (valor: any): number => {
   if (valor === null || valor === undefined || valor === '') return 0;
-  const valorFormatado = String(valor).replace(',', '.');
-  const numeroParsed = parseFloat(valorFormatado);
-  return isNaN(numeroParsed) ? 0 : numeroParsed;
+  let str = String(valor).trim().replace(/\s+/g, '');
+  if (str.includes(',') && str.includes('.')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  } else {
+    str = str.replace(',', '.');
+  }
+  const numeroParsed = parseFloat(str);
+  if (isNaN(numeroParsed)) return 0;
+  return Math.round((numeroParsed + Number.EPSILON) * 1000) / 1000;
+};
+
+const arredondarMoeda = (valor: number): number => {
+  return Math.round((valor + Number.EPSILON) * 100) / 100;
+};
+
+const formatarQtd = (valor: any): string => {
+  const n = converterParaNumero(valor);
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+};
+
+const buscarTodasAsLinhas = async (tabela: string, colunaOrdem: string = 'id', filtroColuna?: string, filtroValor?: string) => {
+  let todosOsDados: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    let query = supabase
+      .from(tabela)
+      .select('*')
+      .order(colunaOrdem, { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (filtroColuna && filtroValor) {
+      query = query.eq(filtroColuna, filtroValor);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todosOsDados = [...todosOsDados, ...data];
+      if (data.length < limite) {
+        buscando = false;
+      } else {
+        inicio += limite;
+      }
+    } else {
+      buscando = false;
+    }
+  }
+  return todosOsDados;
 };
 
 export default function FechamentoScreen() {
@@ -27,7 +96,7 @@ export default function FechamentoScreen() {
   const [carregandoDados, setCarregandoDados] = useState(true);
   const [buscandoExtrato, setBuscandoExtrato] = useState(false);
 
-  // 🟢 PAGINAÇÃO
+  // PAGINAÇÃO
   const [paginaAtual, setPaginaAtual] = useState(1);
   const ITENS_POR_PAGINA = 50;
 
@@ -39,13 +108,14 @@ export default function FechamentoScreen() {
   const [totalGanho, setTotalGanho] = useState(0);
   const [totalPes, setTotalPes] = useState(0);
 
-  // ESTADOS DO MODAL DE EDIÇÃO 100%
+  // ESTADOS DO MODAL DE EDIÇÃO
   const [modalEdicaoVisivel, setModalEdicaoVisivel] = useState(false);
   const [itemEditando, setItemEditando] = useState<any>(null);
   
   const [editData, setEditData] = useState('');
   const [editHora, setEditHora] = useState('');
   const [editServico, setEditServico] = useState('');
+  const [editTipoResina, setEditTipoResina] = useState('ELLIOTTI');
   const [editFazenda, setEditFazenda] = useState('');
   const [editQuadra, setEditQuadra] = useState('');
   const [editRamal, setEditRamal] = useState('');
@@ -59,7 +129,6 @@ export default function FechamentoScreen() {
 
   useEffect(() => {
     if (colaboradorSelecionado) {
-      // 🟢 SUGERE O MÊS ATUAL AUTOMATICAMENTE AO SELECIONAR A PESSOA
       const hoje = new Date();
       const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
       const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
@@ -69,7 +138,7 @@ export default function FechamentoScreen() {
 
       setDataInicio(strInicio);
       setDataFim(strFim);
-      setPaginaAtual(1); // Reseta a página
+      setPaginaAtual(1);
 
       buscarExtratoColaborador(strInicio, strFim);
     } else {
@@ -80,10 +149,11 @@ export default function FechamentoScreen() {
     }
   }, [colaboradorSelecionado]);
 
-  // Atualiza as quadras disponíveis ao trocar a fazenda no modal
   useEffect(() => {
     if (editFazenda) {
-      setQuadrasDisponiveis([...new Set(mapaCompleto.filter(m => m.fazenda === editFazenda).map(m => m.quadra))] as string[]);
+      const quadras = [...new Set(mapaCompleto.filter(m => m.fazenda === editFazenda).map(m => m.quadra))].filter(Boolean) as string[];
+      quadras.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+      setQuadrasDisponiveis(quadras);
     } else {
       setQuadrasDisponiveis([]);
     }
@@ -91,41 +161,55 @@ export default function FechamentoScreen() {
 
   const carregarDadosBase = async () => {
     setCarregandoDados(true);
-    
-    const { data: colabs } = await supabase.from('colaboradores').select('*').order('nome');
-    const { data: servs } = await supabase.from('servicos').select('*').order('nome');
-    const { data: mapa } = await supabase.from('mapa_fazendas').select('*');
+    try {
+      const [colabs, { data: servs }, mapa] = await Promise.all([
+        buscarTodasAsLinhas('colaboradores', 'nome'),
+        supabase.from('servicos').select('*').order('nome'),
+        buscarTodasAsLinhas('mapa_fazendas', 'id')
+      ]);
 
-    if (colabs) setListaColaboradores(colabs);
-    if (servs) setListaServicos(servs);
-    if (mapa) {
-      setMapaCompleto(mapa);
-      setFazendasDisponiveis([...new Set(mapa.map(item => item.fazenda))] as string[]);
+      if (colabs) setListaColaboradores(colabs);
+      if (servs) setListaServicos(servs);
+      if (mapa) {
+        const mapaLimpo = mapa.map((item: any) => ({
+          ...item,
+          fazenda: item.fazenda ? String(item.fazenda).trim() : '',
+          quadra: item.quadra ? String(item.quadra).trim() : ''
+        }));
+        setMapaCompleto(mapaLimpo);
+        const fazendasUnicas = [...new Set(mapaLimpo.map((item: any) => item.fazenda))].filter(Boolean) as string[];
+        fazendasUnicas.sort((a, b) => a.localeCompare(b));
+        setFazendasDisponiveis(fazendasUnicas);
+      }
+    } catch (e: any) {
+      alertaWebMobile('Erro', 'Falha ao carregar dados base: ' + (e?.message || ''));
+    } finally {
+      setCarregandoDados(false);
     }
-    
-    setCarregandoDados(false);
   };
 
   const buscarExtratoColaborador = async (inicioFallback?: string, fimFallback?: string) => {
     setBuscandoExtrato(true);
-    
-    let query = supabase.from('diarios_campo').select('*').order('data', { ascending: false });
-    
-    if (colaboradorSelecionado !== 'TODOS') {
-      query = query.eq('colaborador', colaboradorSelecionado);
-    }
+    try {
+      const data = colaboradorSelecionado !== 'TODOS'
+        ? await buscarTodasAsLinhas('diarios_campo', 'id', 'colaborador', colaboradorSelecionado)
+        : await buscarTodasAsLinhas('diarios_campo', 'id');
 
-    const { data, error } = await query;
+      data.sort((a: any, b: any) => {
+        const dA = new Date(a.data || a.created_at || 0).getTime();
+        const dB = new Date(b.data || b.created_at || 0).getTime();
+        return dB - dA;
+      });
 
-    if (error) {
-      Alert.alert("Erro", "Falha ao buscar os dados.");
-    } else if (data) {
       setDadosCompletosUsuario(data);
       const dInicio = inicioFallback !== undefined ? inicioFallback : dataInicio;
       const dFim = fimFallback !== undefined ? fimFallback : dataFim;
-      aplicarFiltrosEAtualizarTotais(data, dInicio, dFim); 
+      aplicarFiltrosEAtualizarTotais(data, dInicio, dFim);
+    } catch (err: any) {
+      alertaWebMobile("Erro", "Falha ao buscar os dados: " + (err?.message || ''));
+    } finally {
+      setBuscandoExtrato(false);
     }
-    setBuscandoExtrato(false);
   };
 
   const formatarDataInput = (texto: string) => {
@@ -139,6 +223,12 @@ export default function FechamentoScreen() {
     let v = texto.replace(/\D/g, '');
     if (v.length > 2) v = v.replace(/^(\d{2})(\d)/, '$1:$2');
     return v.substring(0, 5);
+  };
+
+  const handleEditQuantidadeChange = (texto: string) => {
+    // Permite números, vírgula e ponto livremente (ex: 0,5 ou 0.5)
+    const limpo = texto.replace(/[^0-9.,]/g, '');
+    setEditQuantidade(limpo);
   };
 
   const aplicarFiltrosEAtualizarTotais = (dadosBase: any[], inicio: string, fim: string) => {
@@ -155,14 +245,14 @@ export default function FechamentoScreen() {
 
     if (isoInicio) {
       filtrados = filtrados.filter(item => {
-        const dataItem = (item.data || item.created_at).split('T')[0];
+        const dataItem = String(item.data || item.created_at || '').split('T')[0];
         return dataItem >= isoInicio;
       });
     }
 
     if (isoFim) {
       filtrados = filtrados.filter(item => {
-        const dataItem = (item.data || item.created_at).split('T')[0];
+        const dataItem = String(item.data || item.created_at || '').split('T')[0];
         return dataItem <= isoFim;
       });
     }
@@ -172,34 +262,33 @@ export default function FechamentoScreen() {
     let somaDinheiro = 0;
     let somaPes = 0;
     filtrados.forEach(item => {
-      somaDinheiro += item.valor_total || 0;
-      somaPes += item.quantidade || 0;
+      somaDinheiro += converterParaNumero(item.valor_total);
+      somaPes += converterParaNumero(item.quantidade);
     });
     
-    setTotalGanho(somaDinheiro);
-    setTotalPes(somaPes);
+    setTotalGanho(arredondarMoeda(somaDinheiro));
+    setTotalPes(converterParaNumero(somaPes));
   };
 
   const acionarFiltroManual = () => {
-    setPaginaAtual(1); // 🟢 Reseta a paginação ao mudar filtro
+    setPaginaAtual(1);
     aplicarFiltrosEAtualizarTotais(dadosCompletosUsuario, dataInicio, dataFim);
   };
 
   const confirmarExclusao = (id: number, servico: string, dataLancamento: string) => {
-    Alert.alert(
+    confirmacaoWebMobile(
       "⚠️ Excluir Lançamento",
       `Deseja apagar o registro de "${servico}" do dia ${new Date(dataLancamento).toLocaleDateString('pt-BR')}?`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        { text: "Sim, Excluir", style: "destructive", onPress: () => deletarLancamento(id) }
-      ]
+      () => deletarLancamento(id)
     );
   };
 
   const deletarLancamento = async (id: number) => {
     const { error } = await supabase.from('diarios_campo').delete().eq('id', id);
-    if (!error) {
-      Alert.alert("✅ Excluído", "Lançamento removido.");
+    if (error) {
+      alertaWebMobile("Erro", "Falha ao excluir: " + error.message);
+    } else {
+      alertaWebMobile("✅ Excluído", "Lançamento removido.");
       buscarExtratoColaborador(); 
     }
   };
@@ -207,22 +296,39 @@ export default function FechamentoScreen() {
   // FUNÇÕES DE EDIÇÃO 100%
   const abrirEdicao = (item: any) => {
     setItemEditando(item);
-    
-    setEditServico(item.servico || '');
-    setEditFazenda(item.fazenda || '');
-    setEditQuadra(item.quadra || '');
-    setEditRamal(item.ramal ? item.ramal.toString() : '');
-    // 🟢 Trás a quantidade formatada pro Brasil pra não dar tela branca
-    setEditQuantidade(item.quantidade ? String(item.quantidade).replace('.', ',') : '');
-    setEditDiasAtestado(item.dias_atestado ? item.dias_atestado.toString() : '');
+
+    let nomeServicoLimpo = String(item.servico || '').replace(/\r?\n/g, ' - ').trim();
+    if (nomeServicoLimpo.toUpperCase().includes(' - HÍBRIDO') || nomeServicoLimpo.toUpperCase().includes(' - HIBRIDO')) {
+      nomeServicoLimpo = nomeServicoLimpo.replace(/\s*-\s*H[ÍI]BRIDO/i, '').trim();
+      setEditTipoResina('HÍBRIDO');
+    } else if (nomeServicoLimpo.toUpperCase().includes(' - TROPICAL')) {
+      nomeServicoLimpo = nomeServicoLimpo.replace(/\s*-\s*TROPICAL/i, '').trim();
+      setEditTipoResina('TROPICAL');
+    } else if (nomeServicoLimpo.toUpperCase().includes(' - ELLIOTTI')) {
+      nomeServicoLimpo = nomeServicoLimpo.replace(/\s*-\s*ELLIOTTI/i, '').trim();
+      setEditTipoResina('ELLIOTTI');
+    } else {
+      setEditTipoResina('ELLIOTTI');
+    }
+
+    setEditServico(nomeServicoLimpo);
+    setEditFazenda(item.fazenda ? String(item.fazenda).trim() : '');
+    setEditQuadra(item.quadra ? String(item.quadra).trim() : '');
+    setEditRamal(item.ramal !== null && item.ramal !== undefined ? String(item.ramal) : '');
+    setEditQuantidade(
+      item.quantidade !== null && item.quantidade !== undefined
+        ? String(item.quantidade).replace('.', ',')
+        : ''
+    );
+    setEditDiasAtestado(item.dias_atestado ? String(item.dias_atestado) : '');
 
     try {
-      const dataBruta = item.data || item.created_at;
+      const dataBruta = String(item.data || item.created_at || '');
       const [datePart, timePart] = dataBruta.split('T');
       const [ano, mes, dia] = datePart.split('-');
       setEditData(`${dia}/${mes}/${ano}`);
       setEditHora(timePart ? timePart.substring(0, 5) : '12:00');
-    } catch(e) {
+    } catch (e) {
       setEditData('');
       setEditHora('');
     }
@@ -230,9 +336,12 @@ export default function FechamentoScreen() {
     setModalEdicaoVisivel(true);
   };
 
+  const isEditColeta = editServico.toLowerCase().includes('coleta');
+  const isEditCarregamento = editServico.toUpperCase().includes('CARREGAMENTO DE RESINA');
+
   const salvarEdicao = async () => {
-    if (editData.length !== 10) return Alert.alert("Erro", "A data deve estar no formato DD/MM/AAAA");
-    if (editHora.length !== 5) return Alert.alert("Erro", "A hora deve estar no formato HH:MM");
+    if (editData.length !== 10) return alertaWebMobile("Erro", "A data deve estar no formato DD/MM/AAAA");
+    if (editHora.length !== 5) return alertaWebMobile("Erro", "A hora deve estar no formato HH:MM");
 
     setSalvandoEdicao(true);
     
@@ -257,7 +366,7 @@ export default function FechamentoScreen() {
       updates = {
         servico: 'Atestado',
         data: novaDataIso,
-        dias_atestado: parseInt(editDiasAtestado) || 0,
+        dias_atestado: parseInt(editDiasAtestado, 10) || 0,
         fazenda: null,
         quadra: null,
         ramal: null,
@@ -266,45 +375,83 @@ export default function FechamentoScreen() {
         valor_unitario: 0
       };
     } else {
-      if (!editFazenda || !editQuadra || !editRamal || !editQuantidade) {
-        setSalvandoEdicao(false);
-        return Alert.alert("Aviso", "Preencha Fazenda, Quadra, Ramal e Quantidade.");
-      }
-
-      const servicoReferencia = listaServicos.find(s => s.nome === editServico);
-      let valUnitario = servicoReferencia?.preco_base || 0;
-      if (servicoReferencia?.tipo_cobranca === 'milheiro') valUnitario = valUnitario / 1000;
-      
-      // 🟢 UTILIZA A NOVA LÓGICA BLINDADA AQUI
       const qtdNova = converterParaNumero(editQuantidade);
 
+      if (!editFazenda || !editQuantidade || qtdNova <= 0) {
+        setSalvandoEdicao(false);
+        return alertaWebMobile("Aviso", "Preencha a Fazenda e informe uma Quantidade válida (ex: 0,5 ou 10).");
+      }
+
+      if (!isEditCarregamento && (!editQuadra || !editRamal)) {
+        setSalvandoEdicao(false);
+        return alertaWebMobile("Aviso", "Preencha Quadra e Ramal.");
+      }
+
+      const servicoReferencia = listaServicos.find(
+        s => String(s.nome).trim().toUpperCase() === String(editServico).trim().toUpperCase()
+      );
+
+      let valUnitario = servicoReferencia
+        ? Number(servicoReferencia.preco_base) || 0
+        : (Number(itemEditando?.valor_unitario) || 0);
+
+      if (servicoReferencia?.tipo_cobranca === 'milheiro') {
+        valUnitario = valUnitario / 1000;
+      }
+
+      const servicoFinal = isEditColeta ? `${editServico} - ${editTipoResina}` : editServico;
+
       updates = {
-        servico: editServico,
+        servico: servicoFinal,
         data: novaDataIso,
         fazenda: editFazenda,
-        quadra: editQuadra,
-        ramal: editRamal.trim(),
+        quadra: isEditCarregamento ? '-' : editQuadra,
+        ramal: isEditCarregamento ? '-' : editRamal.trim(),
         quantidade: qtdNova,
         valor_unitario: valUnitario,
-        valor_total: qtdNova * valUnitario,
+        valor_total: arredondarMoeda(qtdNova * valUnitario),
         dias_atestado: 0
       };
     }
 
-    const { error } = await supabase.from('diarios_campo').update(updates).eq('id', itemEditando.id);
+    const { data: atualizado, error } = await supabase
+      .from('diarios_campo')
+      .update(updates)
+      .eq('id', itemEditando.id)
+      .select()
+      .maybeSingle();
     
     setSalvandoEdicao(false);
     if (error) {
-      Alert.alert("Erro", "Falha ao editar o lançamento.");
+      alertaWebMobile("Erro ao Salvar", `O banco recusou a alteração:\n\n${error.message}`);
     } else {
-      Alert.alert("✅ Sucesso", "O lançamento foi completamente atualizado!");
+      if (
+        updates.quantidade &&
+        atualizado &&
+        Math.abs(Number(atualizado.quantidade) - Number(updates.quantidade)) > 0.001
+      ) {
+        alertaWebMobile(
+          "⚠️ Atenção no Banco de Dados",
+          `Você enviou ${formatarQtd(updates.quantidade)}, mas a coluna "quantidade" no Supabase arredondou para ${atualizado.quantidade}. Altere o tipo da coluna para numeric(12,2) no Supabase.`
+        );
+      } else {
+        alertaWebMobile("✅ Sucesso", "O lançamento foi completamente atualizado!");
+      }
       setModalEdicaoVisivel(false);
-      buscarExtratoColaborador(); // Recarrega os dados corrigidos na tabela e soma os totais
+      buscarExtratoColaborador();
     }
   };
 
-  // 🟢 ARRAY FINAL QUE SERÁ DESENHADO NA TELA (Só renderiza as 50 x página_atual)
   const extratoPaginado = extrato.slice(0, paginaAtual * ITENS_POR_PAGINA);
+
+  const servicoAtualEstaNaLista =
+    editServico === '' ||
+    editServico === 'Falta' ||
+    editServico === 'Atestado' ||
+    listaServicos.some(s => s.nome === editServico);
+
+  const fazendaAtualEstaNaLista = !editFazenda || fazendasDisponiveis.includes(editFazenda);
+  const quadraAtualEstaNaLista = !editQuadra || quadrasDisponiveis.includes(editQuadra);
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -318,7 +465,7 @@ export default function FechamentoScreen() {
           <Text style={styles.label}>Selecione a Visão:</Text>
           <View style={styles.pickerContainer}>
             {carregandoDados ? (
-              <ActivityIndicator color="#34495E" style={{margin: 10}} />
+              <ActivityIndicator color="#34495E" style={{ margin: 10 }} />
             ) : (
               <Picker selectedValue={colaboradorSelecionado} onValueChange={setColaboradorSelecionado}>
                 <Picker.Item label="Selecione um funcionário ou todos..." value="" />
@@ -371,8 +518,7 @@ export default function FechamentoScreen() {
               <View style={styles.resumoRow}>
                 <View style={styles.resumoBox}>
                   <Text style={styles.resumoTitulo}>Total Produzido</Text>
-                  {/* Total usa as variáveis que somam TODO o período filtrado */}
-                  <Text style={styles.resumoValorAzul}>{totalPes.toLocaleString('pt-BR')} un</Text>
+                  <Text style={styles.resumoValorAzul}>{formatarQtd(totalPes)} un</Text>
                 </View>
                 <View style={styles.resumoBox}>
                   <Text style={styles.resumoTitulo}>Valor de Pagamento</Text>
@@ -389,7 +535,7 @@ export default function FechamentoScreen() {
             <Text style={styles.listaTitulo}>Histórico de Lançamentos ({extrato.length})</Text>
 
             {buscandoExtrato ? (
-              <ActivityIndicator size="large" color="#27AE60" style={{marginTop: 20}} />
+              <ActivityIndicator size="large" color="#27AE60" style={{ marginTop: 20 }} />
             ) : extratoPaginado.length === 0 ? (
               <Text style={styles.vazioTexto}>Nenhum registro encontrado neste período.</Text>
             ) : (
@@ -403,8 +549,8 @@ export default function FechamentoScreen() {
                     <View key={item.id} style={[styles.lancamentoCard, isFalta ? styles.cardFalta : isAtestado ? styles.cardAtestado : null]}>
                       
                       <View style={styles.lancamentoTopo}>
-                        <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0,5)}</Text>
-                        <Text style={[styles.lancamentoServico, isFalta ? {color: '#C0392B'} : isAtestado ? {color: '#2980B9'} : null]}>
+                        <Text style={styles.lancamentoData}>{dataExibicao.toLocaleDateString('pt-BR')} - {dataExibicao.toLocaleTimeString('pt-BR').slice(0, 5)}</Text>
+                        <Text style={[styles.lancamentoServico, isFalta ? { color: '#C0392B' } : isAtestado ? { color: '#2980B9' } : null]}>
                           {item.servico}
                         </Text>
                       </View>
@@ -417,8 +563,8 @@ export default function FechamentoScreen() {
                         <View style={styles.lancamentoDetalhes}>
                           <Text style={styles.detalheTexto}>📍 Fazenda: {item.fazenda} | Qd: {item.quadra} | Rm: {item.ramal}</Text>
                           <View style={styles.linhaValores}>
-                            <Text style={styles.detalheQtd}>Qtd: {item.quantidade} pés</Text>
-                            <Text style={styles.detalheValor}>+ R$ {item.valor_total.toFixed(2).replace('.', ',')}</Text>
+                            <Text style={styles.detalheQtd}>Qtd: {formatarQtd(item.quantidade)} un</Text>
+                            <Text style={styles.detalheValor}>+ R$ {Number(item.valor_total || 0).toFixed(2).replace('.', ',')}</Text>
                           </View>
                         </View>
                       )}
@@ -444,7 +590,6 @@ export default function FechamentoScreen() {
                   );
                 })}
 
-                {/* 🟢 BOTÃO DE CARREGAR MAIS SE HOUVEREM MAIS RESULTADOS ESCONDIDOS */}
                 {extrato.length > extratoPaginado.length && (
                   <TouchableOpacity style={styles.btnCarregarMais} onPress={() => setPaginaAtual(p => p + 1)}>
                     <Text style={styles.btnCarregarMaisTexto}>🔽 Carregar Mais (+50)</Text>
@@ -476,11 +621,25 @@ export default function FechamentoScreen() {
                 <Text style={styles.modalLabel}>Serviço:</Text>
                 <View style={styles.pickerModalContainer}>
                   <Picker selectedValue={editServico} onValueChange={setEditServico}>
+                    {!servicoAtualEstaNaLista && <Picker.Item label={editServico} value={editServico} />}
                     <Picker.Item label="Falta" value="Falta" />
                     <Picker.Item label="Atestado" value="Atestado" />
                     {listaServicos.map(s => <Picker.Item key={s.id} label={s.nome} value={s.nome} />)}
                   </Picker>
                 </View>
+
+                {isEditColeta && (
+                  <>
+                    <Text style={styles.modalLabel}>Tipo de Resina (Coleta):</Text>
+                    <View style={styles.pickerModalContainer}>
+                      <Picker selectedValue={editTipoResina} onValueChange={setEditTipoResina}>
+                        <Picker.Item label="ELLIOTTI" value="ELLIOTTI" />
+                        <Picker.Item label="TROPICAL" value="TROPICAL" />
+                        <Picker.Item label="HÍBRIDO" value="HÍBRIDO" />
+                      </Picker>
+                    </View>
+                  </>
+                )}
 
                 {editServico === 'Atestado' && (
                   <>
@@ -497,6 +656,7 @@ export default function FechamentoScreen() {
                         <View style={styles.pickerModalContainer}>
                           <Picker selectedValue={editFazenda} onValueChange={setEditFazenda}>
                             <Picker.Item label="..." value="" />
+                            {!fazendaAtualEstaNaLista && <Picker.Item label={editFazenda} value={editFazenda} />}
                             {fazendasDisponiveis.map((f, i) => <Picker.Item key={i} label={f} value={f} />)}
                           </Picker>
                         </View>
@@ -506,6 +666,7 @@ export default function FechamentoScreen() {
                         <View style={styles.pickerModalContainer}>
                           <Picker selectedValue={editQuadra} onValueChange={setEditQuadra}>
                             <Picker.Item label="..." value="" />
+                            {!quadraAtualEstaNaLista && <Picker.Item label={editQuadra} value={editQuadra} />}
                             {quadrasDisponiveis.map((q, i) => <Picker.Item key={i} label={q} value={q} />)}
                           </Picker>
                         </View>
@@ -515,12 +676,17 @@ export default function FechamentoScreen() {
                     <View style={styles.row}>
                       <View style={styles.colData}>
                         <Text style={styles.modalLabel}>Ramal:</Text>
-                        <TextInput style={styles.modalInput} keyboardType="numeric" value={editRamal} onChangeText={setEditRamal} />
+                        <TextInput style={styles.modalInput} keyboardType="default" value={editRamal} onChangeText={setEditRamal} />
                       </View>
                       <View style={styles.colData}>
-                        <Text style={styles.modalLabel}>Quantidade:</Text>
-                        {/* 🟢 TECLADO DECIMAL PARA PERMITIR PONTO OU VÍRGULA */}
-                        <TextInput style={styles.modalInput} keyboardType="decimal-pad" value={editQuantidade} onChangeText={setEditQuantidade} />
+                        <Text style={styles.modalLabel}>Quantidade (Ex: 0,5):</Text>
+                        <TextInput
+                          style={styles.modalInput}
+                          keyboardType="decimal-pad"
+                          value={editQuantidade}
+                          onChangeText={handleEditQuantidadeChange}
+                          placeholder="Ex: 0,5"
+                        />
                       </View>
                     </View>
                     <Text style={styles.modalAviso}>O total R$ será recalculado com o preço atual do serviço.</Text>
@@ -541,7 +707,7 @@ export default function FechamentoScreen() {
           </View>
         </Modal>
 
-        <View style={{height: 80}} />
+        <View style={{ height: 80 }} />
       </ScrollView>
     </KeyboardAvoidingView>
   );

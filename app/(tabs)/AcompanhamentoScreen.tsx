@@ -3,8 +3,9 @@ import { Picker } from '@react-native-picker/picker';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
+import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
 
@@ -44,6 +45,60 @@ const obterFeriadosNacionais = (ano: number) => {
   feriados.push(formatar(addDias(pascoa, 60)));  
 
   return feriados.map(dMes => `${ano}-${dMes.split('/')[1]}-${dMes.split('/')[0]}`);
+};
+
+const buscarTodosColaboradores = async () => {
+  let todos: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from('colaboradores')
+      .select('*')
+      .order('id', { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todos = [...todos, ...data];
+      if (data.length < limite) buscando = false;
+      else inicio += limite;
+    } else {
+      buscando = false;
+    }
+  }
+  return todos;
+};
+
+const buscarDiariosDoDia = async (dataBD: string) => {
+  let todos: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from('diarios_campo')
+      .select('*')
+      .gte('data', `${dataBD} 00:00:00`)
+      .lte('data', `${dataBD} 23:59:59`)
+      .order('id', { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todos = [...todos, ...data];
+      if (data.length < limite) buscando = false;
+      else inicio += limite;
+    } else {
+      buscando = false;
+    }
+  }
+  return todos;
 };
 
 export default function AcompanhamentoScreen() {
@@ -92,11 +147,14 @@ export default function AcompanhamentoScreen() {
     inicializar();
   }, []);
 
-  useEffect(() => {
-    if (dataSelecionada.length === 10 && !carregandoPerfil) {
-      buscarProducaoDoDia();
-    }
-  }, [dataSelecionada, fiscalSelecionado, perfilUsuario]);
+  // 🟢 RECARREGA AUTOMATICAMENTE SEMPRE QUE VOLTAR PARA A TELA OU TROCAR FILTROS
+  useFocusEffect(
+    useCallback(() => {
+      if (dataSelecionada.length === 10 && !carregandoPerfil) {
+        buscarProducaoDoDia();
+      }
+    }, [dataSelecionada, fiscalSelecionado, perfilUsuario, carregandoPerfil, nomeUsuarioLogado, idUsuarioLogado, listaFiscais])
+  );
 
   const aplicarMascaraData = (texto: string) => {
     let valorSujo = texto.replace(/\D/g, ''); 
@@ -121,7 +179,7 @@ export default function AcompanhamentoScreen() {
         .from('perfis') 
         .select('cargo, nome')
         .eq('id', user.id) 
-        .single();
+        .maybeSingle();
 
       if (usuarioData) {
         setPerfilUsuario(usuarioData.cargo);
@@ -175,6 +233,16 @@ export default function AcompanhamentoScreen() {
     return d;
   };
 
+  const normalizarChaveNome = (nome: any) => {
+    if (!nome) return '';
+    return String(nome)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+  };
+
   const verificarSeAusencia = (servicoNome: string) => {
     if (!servicoNome) return false;
     const s = servicoNome.toUpperCase();
@@ -190,6 +258,12 @@ export default function AcompanhamentoScreen() {
     if (!servicoNome) return false;
     const s = servicoNome.toUpperCase();
     return s.includes('DEMITID') || s.includes('DEMISS') || s.includes('DESLIGAD') || s.includes('RESCIS');
+  };
+
+  const verificarSeFerias = (texto: string) => {
+    if (!texto) return false;
+    const s = String(texto).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+    return s.includes('FERIA');
   };
 
   const buscarProducaoDoDia = async () => {
@@ -222,58 +296,125 @@ export default function AcompanhamentoScreen() {
         }
       }
 
-      // 1. BUSCA DIÁRIOS DE CAMPO DO DIA
-      let queryProd = supabase
-        .from('diarios_campo')
-        .select('*')
-        .gte('data', `${dataBD} 00:00:00`)
-        .lte('data', `${dataBD} 23:59:59`)
-        .order('colaborador', { ascending: true });
+      // 1. BUSCA TODOS OS COLABORADORES ATUALIZADOS + DIÁRIOS DO DIA
+      const [todosColabs, dataDiaTodos] = await Promise.all([
+        buscarTodosColaboradores(),
+        buscarDiariosDoDia(dataBD)
+      ]);
 
-      if (fiscalIdQuery !== 'TODOS') {
-        queryProd = queryProd.eq('fiscal_nome', fiscalNomeQuery);
-      }
-      
-      const { data: dataDia, error } = await queryProd;
-      if (error) throw error;
+      // Mapa rápido para saber a equipe ATUAL de qualquer colaborador pelo nome
+      const mapaColabPorNome = new Map<string, any>();
+      (todosColabs || []).forEach((c: any) => {
+        const chave = normalizarChaveNome(c.nome);
+        if (chave) mapaColabPorNome.set(chave, c);
+      });
 
-      let data = [...(dataDia || [])];
+      // 🟢 REGRA UNIFICADA: Sempre respeita a equipe atual (fiscal_id) do colaborador
+      const pertenceAoFiscalSelecionado = (reg: any) => {
+        if (fiscalIdQuery === 'TODOS') return true;
+        const nomeNorm = normalizarChaveNome(reg.colaborador);
+        const colabAtual = mapaColabPorNome.get(nomeNorm);
+
+        if (colabAtual && colabAtual.fiscal_id) {
+          return String(colabAtual.fiscal_id) === String(fiscalIdQuery);
+        }
+        return normalizarChaveNome(reg.fiscal_nome) === normalizarChaveNome(fiscalNomeQuery);
+      };
+
       const demitidosNoDiario = new Set<string>();
+      const idsEmFerias = new Set<string>();
+      const nomesEmFerias = new Set<string>();
 
-      data.forEach((d: any) => {
+      (dataDiaTodos || []).forEach((d: any) => {
         if (verificarSeDemissao(d.servico) && d.colaborador) {
-          demitidosNoDiario.add(String(d.colaborador).trim().toUpperCase());
+          demitidosNoDiario.add(normalizarChaveNome(d.colaborador));
+        }
+        if (verificarSeFerias(d.servico) && d.colaborador) {
+          nomesEmFerias.add(normalizarChaveNome(d.colaborador));
         }
       });
 
-      // 1.1. RESGATE DE ATESTADOS E AUSÊNCIAS EM ATÉ 180 DIAS
+      let data = (dataDiaTodos || []).filter(pertenceAoFiscalSelecionado);
+
+      // 🟢 1.0. BUSCA FÉRIAS VIGENTES NA DATA (TABELA FERIAS)
+      try {
+        const { data: feriasData, error: errFerias } = await supabase.from('ferias').select('*');
+        if (!errFerias && feriasData && feriasData.length > 0) {
+          feriasData.forEach((f: any) => {
+            const statusF = String(f.status || f.situacao || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+            if (statusF.includes('CANCELAD') || statusF.includes('EXCLUID')) return;
+
+            const dtIniRaw = f.data_inicio || f.inicio || f.data_inicial || f.data_saida;
+            const dtFimRaw = f.data_fim || f.fim || f.data_final || f.termino;
+            const dtRetornoRaw = f.data_retorno || f.retorno;
+
+            const dtIni = dtIniRaw ? padronizarDataDoBanco(String(dtIniRaw)) : '';
+            let vigenteNoDia = false;
+
+            if (dtIni && dtFimRaw) {
+              const dtFim = padronizarDataDoBanco(String(dtFimRaw));
+              if (dtFim) vigenteNoDia = dataBD >= dtIni && dataBD <= dtFim;
+            } else if (dtIni && dtRetornoRaw) {
+              const dtRet = padronizarDataDoBanco(String(dtRetornoRaw));
+              if (dtRet) vigenteNoDia = dataBD >= dtIni && dataBD < dtRet;
+            } else if (dtIni) {
+              const diasF = parseInt(f.dias || f.quantidade_dias || f.dias_ferias, 10) || 30;
+              const pIni = dtIni.split('-');
+              const dtFimCalc = new Date(parseInt(pIni[0], 10), parseInt(pIni[1], 10) - 1, parseInt(pIni[2], 10));
+              dtFimCalc.setDate(dtFimCalc.getDate() + diasF - 1);
+              vigenteNoDia = dataBD >= dtIni && dataBD <= formatarDataIso(dtFimCalc);
+            } else if (verificarSeFerias(statusF)) {
+              vigenteNoDia = true;
+            }
+
+            if (vigenteNoDia) {
+              const cId = f.colaborador_id || f.funcionario_id || f.colab_id;
+              if (cId) idsEmFerias.add(String(cId));
+              const cNome = f.colaborador || f.colaborador_nome || f.funcionario || f.nome;
+              if (cNome) nomesEmFerias.add(normalizarChaveNome(cNome));
+            }
+          });
+        }
+      } catch (errFerias) {
+        console.warn('Aviso: Falha ao buscar tabela de férias:', errFerias);
+      }
+
+      // 1.1. RESGATE DE ATESTADOS, AUSÊNCIAS E FÉRIAS EM ATÉ 180 DIAS
       try {
         const pData = dataBD.split('-');
         const dtAntiga = new Date(parseInt(pData[0], 10), parseInt(pData[1], 10) - 1, parseInt(pData[2], 10));
         dtAntiga.setDate(dtAntiga.getDate() - 180);
         const dataBuscaAntigaBD = formatarDataIso(dtAntiga);
 
-        let queryAusencias = supabase
+        const { data: ausenciasData } = await supabase
           .from('diarios_campo')
           .select('*')
           .gte('data', `${dataBuscaAntigaBD} 00:00:00`)
           .lt('data', `${dataBD} 00:00:00`)
-          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%,servico.ilike.%DEMITID%,servico.ilike.%DEMISS%,servico.ilike.%DESLIGAD%');
-
-        if (fiscalIdQuery !== 'TODOS') {
-          queryAusencias = queryAusencias.eq('fiscal_nome', fiscalNomeQuery);
-        }
-
-        const { data: ausenciasData } = await queryAusencias;
+          .or('servico.ilike.%ATESTADO%,servico.ilike.%ABONO%,servico.ilike.%ABONADO%,servico.ilike.%DECLARAÇÃO%,servico.ilike.%AFASTAMENTO%,servico.ilike.%LICENÇA%,servico.ilike.%DEMITID%,servico.ilike.%DEMISS%,servico.ilike.%DESLIGAD%,servico.ilike.%FERIA%,servico.ilike.%FÉRIA%');
 
         if (ausenciasData && ausenciasData.length > 0) {
           ausenciasData.forEach((r: any) => {
             if (verificarSeDemissao(r.servico) && r.colaborador) {
-              demitidosNoDiario.add(String(r.colaborador).trim().toUpperCase());
+              demitidosNoDiario.add(normalizarChaveNome(r.colaborador));
+            }
+            if (verificarSeFerias(r.servico) && r.colaborador) {
+              const dtIniF = padronizarDataDoBanco(r.data_atestado || r.data_inicio || r.data);
+              if (dtIniF) {
+                const diasF = parseInt(r.dias_atestado || r.dias, 10) || 1;
+                const pIniF = dtIniF.split('-');
+                const dtFimF = new Date(parseInt(pIniF[0], 10), parseInt(pIniF[1], 10) - 1, parseInt(pIniF[2], 10));
+                dtFimF.setDate(dtFimF.getDate() + diasF - 1);
+                const dtFimFStr = r.data_fim ? padronizarDataDoBanco(r.data_fim) : formatarDataIso(dtFimF);
+                if (dataBD >= dtIniF && dataBD <= dtFimFStr) {
+                  nomesEmFerias.add(normalizarChaveNome(r.colaborador));
+                }
+              }
             }
           });
 
           const ausenciasVigentesHoje = ausenciasData.filter((r: any) => {
+            if (!pertenceAoFiscalSelecionado(r)) return false;
             if (!verificarSeAusencia(r.servico)) return false;
 
             const dataInicioAusencia = padronizarDataDoBanco(r.data_atestado || r.data);
@@ -291,11 +432,11 @@ export default function AcompanhamentoScreen() {
           });
 
           ausenciasVigentesHoje.forEach((aus: any) => {
-            const nomeAus = String(aus.colaborador || '').trim().toUpperCase();
-            if (demitidosNoDiario.has(nomeAus)) return;
+            const nomeAusNorm = normalizarChaveNome(aus.colaborador);
+            if (demitidosNoDiario.has(nomeAusNorm) || nomesEmFerias.has(nomeAusNorm)) return;
 
             const jaRegistradoHoje = data.some(
-              (d: any) => String(d.colaborador || '').trim().toUpperCase() === nomeAus
+              (d: any) => normalizarChaveNome(d.colaborador) === nomeAusNorm
             );
             if (!jaRegistradoHoje) {
               data.push(aus);
@@ -306,21 +447,26 @@ export default function AcompanhamentoScreen() {
         console.warn('Aviso: Falha ao buscar ausências antigas:', errAusencia);
       }
 
-      // 2. BUSCA O TAMANHO DA EQUIPE VINCULADA (FILTRANDO DEMITIDOS E INATIVOS)
-      let queryEquipe = supabase.from('colaboradores').select('*');
-      if (fiscalIdQuery !== 'TODOS') {
-        queryEquipe = queryEquipe.eq('fiscal_id', fiscalIdQuery);
-      }
-      const { data: equipeDataBruta } = await queryEquipe;
+      // 2. MONTA A EQUIPE ATUAL VINCULADA (FILTRANDO EQUIPE, DEMITIDOS, INATIVOS E FÉRIAS)
+      const equipeData = (todosColabs || []).filter((e: any) => {
+        if (fiscalIdQuery !== 'TODOS') {
+          if (e.fiscal_id) {
+            if (String(e.fiscal_id) !== String(fiscalIdQuery)) return false;
+          } else {
+            if (normalizarChaveNome(e.fiscal_vinculado) !== normalizarChaveNome(fiscalNomeQuery)) return false;
+          }
+        }
 
-      const equipeData = (equipeDataBruta || []).filter((e: any) => {
-        const nomeColab = String(e.nome || '').trim().toUpperCase();
-        if (!nomeColab || demitidosNoDiario.has(nomeColab)) return false;
+        const nomeColabNorm = normalizarChaveNome(e.nome);
+        if (!nomeColabNorm || demitidosNoDiario.has(nomeColabNorm)) return false;
+        if ((e.id && idsEmFerias.has(String(e.id))) || nomesEmFerias.has(nomeColabNorm)) return false;
 
         if (e.ativo === false || String(e.ativo).toLowerCase() === 'false' || String(e.ativo).toLowerCase() === 'não' || String(e.ativo).toLowerCase() === 'nao' || e.ativo === 0) return false;
         if (e.demitido === true || String(e.demitido).toLowerCase() === 'true' || String(e.demitido).toLowerCase() === 'sim' || e.demitido === 1) return false;
         if (e.inativo === true || String(e.inativo).toLowerCase() === 'true' || String(e.inativo).toLowerCase() === 'sim' || e.inativo === 1) return false;
         if (e.bloqueado === true || String(e.bloqueado).toLowerCase() === 'true' || String(e.bloqueado).toLowerCase() === 'sim' || e.bloqueado === 1) return false;
+        if (e.em_ferias === true || String(e.em_ferias).toLowerCase() === 'true' || String(e.em_ferias).toLowerCase() === 'sim' || e.em_ferias === 1) return false;
+        if (e.ferias === true || String(e.ferias).toLowerCase() === 'true' || String(e.ferias).toLowerCase() === 'sim' || e.ferias === 1) return false;
 
         const statusTxt = `${e.status || ''} ${e.situacao || ''} ${e.condicao || ''} ${e.motivo || ''}`.toUpperCase();
         if (
@@ -330,7 +476,8 @@ export default function AcompanhamentoScreen() {
           statusTxt.includes('DESLIGAD') ||
           statusTxt.includes('RESCIS') ||
           statusTxt.includes('BLOQUEAD') ||
-          statusTxt.includes('EXCLUID')
+          statusTxt.includes('EXCLUID') ||
+          verificarSeFerias(statusTxt)
         ) {
           return false;
         }
@@ -339,6 +486,14 @@ export default function AcompanhamentoScreen() {
         if (dtDemissaoRaw) {
           const dtDemissao = padronizarDataDoBanco(String(dtDemissaoRaw));
           if (dtDemissao && dtDemissao <= dataBD) return false;
+        }
+
+        const dtFeriasIniRaw = e.ferias_inicio || e.data_inicio_ferias || e.inicio_ferias;
+        const dtFeriasFimRaw = e.ferias_fim || e.data_fim_ferias || e.fim_ferias;
+        if (dtFeriasIniRaw && dtFeriasFimRaw) {
+          const dtFIni = padronizarDataDoBanco(String(dtFeriasIniRaw));
+          const dtFFim = padronizarDataDoBanco(String(dtFeriasFimRaw));
+          if (dtFIni && dtFFim && dataBD >= dtFIni && dataBD <= dtFFim) return false;
         }
 
         return true;
@@ -350,27 +505,35 @@ export default function AcompanhamentoScreen() {
       const totalAtivos = equipeData ? equipeData.length : 0;
       setEquipeTamanho(totalAtivos);
 
-      const produtoresUnicos = new Set<string>();
-      const atestadosUnicos = new Set<string>();
+      const produtoresUnicosNorm = new Set<string>();
+      const atestadosUnicosNorm = new Set<string>();
+      const atestadosNomesExibicao = new Map<string, string>();
 
       if (data) {
         data.forEach(d => {
           const srv = String(d.servico || '').toUpperCase();
-          if (verificarSeDemissao(srv)) return;
+          if (verificarSeDemissao(srv) || verificarSeFerias(srv)) return;
+
+          const nomeNorm = normalizarChaveNome(d.colaborador);
+          if (!nomeNorm) return;
 
           if (verificarSeAusencia(srv)) {
-            if (d.colaborador) atestadosUnicos.add(String(d.colaborador).trim().toUpperCase());
+            atestadosUnicosNorm.add(nomeNorm);
+            atestadosNomesExibicao.set(nomeNorm, String(d.colaborador).trim().toUpperCase());
           } else {
-            if (d.colaborador) produtoresUnicos.add(String(d.colaborador).trim().toUpperCase());
+            produtoresUnicosNorm.add(nomeNorm);
           }
         });
       }
 
-      const equipeNomes = equipeData ? equipeData.map(e => String(e.nome).trim().toUpperCase()) : [];
-      const quemProduziu = Array.from(produtoresUnicos);
-      const quemAtestado = Array.from(atestadosUnicos);
+      const faltantes = equipeData
+        .filter(e => {
+          const nNorm = normalizarChaveNome(e.nome);
+          return !produtoresUnicosNorm.has(nNorm) && !atestadosUnicosNorm.has(nNorm);
+        })
+        .map(e => String(e.nome).trim().toUpperCase());
 
-      const faltantes = equipeNomes.filter(nome => !quemProduziu.includes(nome) && !quemAtestado.includes(nome));
+      const quemAtestado = Array.from(atestadosNomesExibicao.values());
 
       setNomesFaltas(faltantes.sort());
       setNomesAtestados(quemAtestado.sort());
@@ -422,7 +585,7 @@ export default function AcompanhamentoScreen() {
           };
         });
 
-        dadosUnificados.sort((a: any, b: any) => a.colaborador.localeCompare(b.colaborador));
+        dadosUnificados.sort((a: any, b: any) => String(a.colaborador || '').localeCompare(String(b.colaborador || '')));
         setRegistros(dadosUnificados);
         
         const sumQtd = dadosUnificados.reduce((acc, item: any) => acc + (Number(item.quantidade) || 0), 0);
@@ -538,7 +701,6 @@ export default function AcompanhamentoScreen() {
         const valorUni = item.valor_unitario ? Number(item.valor_unitario).toFixed(4).replace('.', ',') : '0,00';
         const valorTot = item.valor_total ? Number(item.valor_total).toFixed(2).replace('.', ',') : '0,00';
         
-        // 🟢 PDF COM COLUNA DE FAZENDA (Tamanhos ajustados)
         linhasTabela += `<tr><td style="text-align: left; font-weight: bold;">${item.colaborador}</td><td style="text-align: left;">${item.fazenda || '-'}</td><td style="text-align: left;">${item.servico || '-'}</td><td>${item.quadra || '-'}</td><td>${item.ramal || '-'}</td><td><strong>${item.quantidade || '0'}</strong></td><td>R$ ${valorUni}</td><td style="color: #27AE60;"><strong>R$ ${valorTot}</strong></td></tr>`;
       });
 
@@ -748,7 +910,7 @@ export default function AcompanhamentoScreen() {
             <View style={styles.resumoBox}>
               <Text style={styles.resumoTitulo}>Faltas Equipe</Text>
               <Text style={styles.resumoValorVermelho}>{totalFaltas}</Text>
-              <Text style={{fontSize: 9, color: '#BDC3C7'}}>De {equipeTamanho} ativos</Text>
+              <Text style={{ fontSize: 9, color: '#BDC3C7' }}>De {equipeTamanho} ativos</Text>
               {nomesFaltas.length > 0 && (
                  <Text style={styles.textoNomesVermelho}>{nomesFaltas.join(', ')}</Text>
               )}
@@ -855,7 +1017,6 @@ export default function AcompanhamentoScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ flexGrow: 0 }}>
               <View style={{ minWidth: '100%' }}>
                 
-                {/* 🟢 CABEÇALHO DA TABELA ATUALIZADO */}
                 <View style={styles.tableHeader}>
                   <Text style={[styles.th, { width: 140 }]}>Funcionário</Text>
                   <Text style={[styles.th, { width: 140 }]}>Fazenda</Text>
@@ -867,7 +1028,6 @@ export default function AcompanhamentoScreen() {
                   <Text style={[styles.th, { width: 85, textAlign: 'right' }]}>Total</Text>
                 </View>
 
-                {/* 🟢 LINHAS DA TABELA ATUALIZADAS */}
                 {registros.map((item, index) => (
                   <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
                     <Text style={[styles.td, { width: 140, fontWeight: 'bold' }]} numberOfLines={1}>

@@ -47,7 +47,7 @@ const limparTextoExibicao = (txt: any) => {
   return String(txt).replace(/\s+/g, ' ').trim();
 };
 
-// 🟢 BUSCA PAGINADA COMPLETA (Burla o limite de 1.000 linhas do Supabase)
+// Busca paginada completa (burla o limite de 1.000 linhas do Supabase)
 const buscarTodasAsLinhas = async (tabela: string, colunaOrdem: string = 'id') => {
   let todosOsDados: any[] = [];
   const limite = 1000;
@@ -75,20 +75,6 @@ const buscarTodasAsLinhas = async (tabela: string, colunaOrdem: string = 'id') =
     }
   }
   return todosOsDados;
-};
-
-const calcularSimilaridade = (str1: string, str2: string): number => {
-  const limpo1 = normalizarTexto(str1).replace(/[^A-Z0-9 ]/g, '');
-  const limpo2 = normalizarTexto(str2).replace(/[^A-Z0-9 ]/g, '');
-  
-  const palavras1 = limpo1.split(/\s+/).map(p => p.replace(/S$/, ''));
-  const palavras2 = limpo2.split(/\s+/).map(p => p.replace(/S$/, ''));
-  
-  let match = 0;
-  palavras1.forEach(p1 => {
-    if (p1.length > 0 && palavras2.includes(p1)) match++;
-  });
-  return match;
 };
 
 const Relogio = memo(({ onAtualizar }: { onAtualizar: () => void }) => {
@@ -124,7 +110,7 @@ export default function RetroativoScreen() {
   const [quantidade, setQuantidade] = useState('');
   const [valorTotalCalculado, setValorTotalCalculado] = useState(0);
 
-  // 👉 CAMPOS PARA O MODO RETROATIVO
+  // Campos para o modo retroativo
   const [dataRetroativa, setDataRetroativa] = useState('');
   const [horaRetroativa, setHoraRetroativa] = useState('');
   
@@ -145,7 +131,7 @@ export default function RetroativoScreen() {
   
   const [isOffline, setIsOffline] = useState(false);
 
-  // ESTADOS DOS MODAIS E EDIÇÃO
+  // Estados dos modais e edição
   const [modalEquipeVisivel, setModalEquipeVisivel] = useState(false);
   const [modalPendentesVisivel, setModalPendentesVisivel] = useState(false);
   const [indexEdicao, setIndexEdicao] = useState<number | null>(null);
@@ -216,7 +202,6 @@ export default function RetroativoScreen() {
     }
   };
 
-  // Higieniza os textos do mapa para evitar que espaços em branco escondam quadras ou ramais
   const higienizarListaMapa = (lista: any[]) => {
     return lista.map(item => ({
       ...item,
@@ -340,7 +325,6 @@ export default function RetroativoScreen() {
     alertaWebMobile("Atualizando", "Buscando dados atualizados do servidor..."); 
   };
 
-  // Atualiza a lista de quadras disponíveis quando a fazenda muda
   useEffect(() => {
     if (fazenda) {
       const quadras = [...new Set(mapaCompleto.filter(m => m.fazenda === fazenda).map(m => m.quadra))].filter(Boolean) as string[];
@@ -351,7 +335,6 @@ export default function RetroativoScreen() {
     }
   }, [fazenda, mapaCompleto]);
 
-  // Atualiza a lista de ramais disponíveis quando a quadra muda
   useEffect(() => {
     if (fazenda && quadra) {
       const ramaisDessaQuadra = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra);
@@ -372,37 +355,11 @@ export default function RetroativoScreen() {
     }
   }, [quadra, fazenda, mapaCompleto]);
 
-  // Filtra os serviços permitidos para a fazenda selecionada
+  // Permite escolher qualquer serviço ativo na área sem travar
   useEffect(() => {
-    if (!fazenda) {
-      setServicosFiltrados(listaServicos);
-      return;
-    }
+    setServicosFiltrados(listaServicos);
+  }, [listaServicos]);
 
-    const fazendaNorm = normalizarTexto(fazenda);
-    
-    const filtrados = listaServicos.filter(s => {
-      if (!s.fazendas_permitidas) return true;
-
-      let permitidas: string[] = [];
-      if (Array.isArray(s.fazendas_permitidas)) {
-        permitidas = s.fazendas_permitidas.map((f: string) => normalizarTexto(f));
-      } else {
-        permitidas = String(s.fazendas_permitidas).split(',').map((f: string) => normalizarTexto(f));
-      }
-
-      return permitidas.some(p => fazendaNorm.includes(p) || p.includes(fazendaNorm));
-    });
-
-    setServicosFiltrados(filtrados);
-
-    if (servico && !filtrados.find(s => s.nome === servico)) {
-      setServico('');
-      setServicoSelecionadoCompleto(null);
-    }
-  }, [fazenda, listaServicos]);
-
-  // Calcula o valor total em R$
   useEffect(() => {
     if (servicoSelecionadoCompleto && quantidade) {
       const qtdNum = converterParaNumero(quantidade);
@@ -418,13 +375,7 @@ export default function RetroativoScreen() {
   const isCarregamentoResina = servico?.toUpperCase().includes('CARREGAMENTO DE RESINA');
   const permiteMultiplosRamais = servicoSelecionadoCompleto?.permite_multiplos === true || isColeta;
 
-  const isServicoCoringa = servicoSelecionadoCompleto?.is_coringa === true || 
-                           String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'sim' || 
-                           String(servicoSelecionadoCompleto?.is_coringa).toLowerCase() === 'true' ||
-                           servicoSelecionadoCompleto?.is_coringa === 1;
-
   let capacidadesDisponiveis: { servico: string, total: number }[] = [];
-  let limitePesCalculado: number | null = null;
 
   if (ramaisSelecionados.length > 0) {
     const cadastrosSelecionados = mapaCompleto.filter(m => 
@@ -443,37 +394,6 @@ export default function RetroativoScreen() {
     mapaServicos.forEach((total, srv) => {
       capacidadesDisponiveis.push({ servico: srv, total });
     });
-
-    const servicoFormatado = String(servico).trim().toUpperCase();
-    let matchedTotal = 0;
-    
-    for (let cap of capacidadesDisponiveis) {
-      if (cap.servico.toUpperCase() === servicoFormatado) {
-        matchedTotal = cap.total;
-        break;
-      }
-    }
-    
-    if (matchedTotal === 0) {
-      let maiorPontuacao = -1;
-      for (let cap of capacidadesDisponiveis) {
-        if (cap.servico !== 'Livre') {
-          const score = calcularSimilaridade(servicoFormatado, cap.servico);
-          if (score > maiorPontuacao && score > 0) {
-            maiorPontuacao = score;
-            matchedTotal = cap.total;
-          }
-        }
-      }
-    }
-    
-    if (matchedTotal === 0) {
-      const livre = capacidadesDisponiveis.find(c => c.servico === 'Livre');
-      if (livre) matchedTotal = livre.total;
-      else if (capacidadesDisponiveis.length > 0) matchedTotal = capacidadesDisponiveis[0].total;
-    }
-
-    limitePesCalculado = matchedTotal > 0 ? matchedTotal : null;
   }
 
   const handleTrocaFazenda = (novaFazenda: string) => {
@@ -519,33 +439,12 @@ export default function RetroativoScreen() {
     setRamaisSelecionados(ramaisDisponiveis.map(r => String(r.ramal)));
   };
 
+  // Sem trava de limite: aceita livremente qualquer valor digitado
   const handleMudancaQuantidade = (texto: string) => {
-    const valorDigitado = converterParaNumero(texto);
-    
-    const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
-    const fiscalRealDaEquipe = dadosColab?.fiscal_vinculado || perfilLogado?.nome || 'Não Identificado';
-
-    if (!isCarregamentoResina && !isServicoCoringa && limitePesCalculado !== null && valorDigitado > limitePesCalculado) {
-      if (!isOffline) {
-        supabase.from('alertas_limite').insert([{
-          colaborador: colaborador || 'Não Selecionado',
-          fazenda: fazenda || 'Não Selecionada',
-          quadra: quadra || 'Não Selecionada',
-          ramal: ramaisSelecionados.join(', ') || 'Nenhum',
-          servico: servico || 'Não Selecionado',
-          quantidade_tentada: valorDigitado,
-          limite_permitido: limitePesCalculado,
-          fiscal_nome: fiscalRealDaEquipe
-        }]).then().catch(() => { console.log('Alerta bloqueado pela falta de rede'); }); 
-      }
-      alertaWebMobile("⚠️ Limite Excedido", "A quantidade informada é maior que o limite deste serviço no(s) ramal(is) selecionado(s).");
-      setQuantidade(''); 
-    } else {
-      setQuantidade(texto);
-    }
+    setQuantidade(texto);
   };
 
-  // 👉 MÁSCARAS PARA DATA E HORA RETROATIVAS
+  // Máscaras para data e hora retroativas
   const handleDataChange = (text: string) => {
     let v = text.replace(/\D/g, '');
     if (v.length > 2) v = v.replace(/^(\d{2})(\d)/, '$1/$2');
@@ -657,6 +556,7 @@ export default function RetroativoScreen() {
         return alertaWebMobile("Aviso", "Preencha a Quadra e selecione ao menos 1 Ramal!");
       }
       
+      // Trava de data bloqueada no ramal
       for (let r of ramaisSelecionados) {
         const ramalRows = mapaCompleto.filter(m => m.fazenda === fazenda && m.quadra === quadra && String(m.ramal) === r);
         if (ramalRows.length === 0) {
@@ -668,11 +568,6 @@ export default function RetroativoScreen() {
           }
         }
       }
-
-      if (!isServicoCoringa && limitePesCalculado !== null && qtdNumerica > limitePesCalculado) {
-        setQuantidade('');
-        return alertaWebMobile("⚠️ Limite Excedido", "A quantidade informada é maior que o limite total permitido para o(s) ramal(is) selecionado(s).");
-      }
     }
 
     setSalvando(true);
@@ -682,8 +577,6 @@ export default function RetroativoScreen() {
     try {
       const numRamalFinal = isCarregamentoResina ? '-' : ramaisSelecionados.join(', ');
       const quadraFinal = isCarregamentoResina ? '-' : quadra;
-      
-      // 🟢 CORREÇÃO DO NOME DA COLETA COM TRAÇO (" - ") EM UMA ÚNICA LINHA
       const nomeServicoFinalParaOBanco = isColeta ? `${servico} - ${tipoResina}` : servico;
 
       const dadosColab = listaColaboradores.find(c => c.nome === colaborador);
@@ -728,7 +621,7 @@ export default function RetroativoScreen() {
     }
   };
 
-  // 🟢 SINCRONIZAÇÃO SEGURA LOTE A LOTE (Nunca duplica lotes já enviados se a rede cair no meio)
+  // Sincronização segura lote a lote (nunca duplica lotes já enviados)
   const sincronizarComBanco = async () => {
     if (lancamentosPendentes.length === 0) return;
     setSincronizando(true);
@@ -757,7 +650,6 @@ export default function RetroativoScreen() {
         const { error: dbError } = await supabase.from('diarios_campo').insert(loteProntoParaNuvem);
         if (dbError) throw new Error(dbError.message);
 
-        // Remove imediatamente os itens que já foram salvos no banco
         filaRestante = filaRestante.slice(tamanhoLote);
         setLancamentosPendentes(filaRestante);
         if (filaRestante.length > 0) {
@@ -856,7 +748,7 @@ export default function RetroativoScreen() {
                   </Picker>
                 </View>
 
-                {/* 👉 BLOCO DE DATA E HORA RETROATIVAS */}
+                {/* Bloco de data e hora retroativas */}
                 <View style={[styles.rowData, { marginTop: 5, marginBottom: 10, padding: 10, backgroundColor: '#FEF9E7', borderRadius: 8, borderWidth: 1, borderColor: '#F1C40F' }]}>
                   <View style={styles.colData}>
                     <Text style={styles.label}>Data (Retroativa):</Text>
@@ -882,7 +774,7 @@ export default function RetroativoScreen() {
                   </View>
                 </View>
 
-                {/* 👉 FAZENDA E QUADRA EM COLUNA */}
+                {/* Fazenda e Quadra em coluna */}
                 <View style={styles.row}>
                   <View style={styles.col}>
                     <Text style={styles.label}>Fazenda:</Text>
@@ -908,12 +800,12 @@ export default function RetroativoScreen() {
                 <Text style={styles.label}>Serviço Feito:</Text>
                 <View style={styles.pickerContainer}>
                   <Picker selectedValue={servico} onValueChange={handleTrocaServico} style={styles.picker}>
-                    <Picker.Item label={fazenda ? "Selecione o Serviço..." : "Selecione a fazenda primeiro..."} value="" />
+                    <Picker.Item label="Selecione o Serviço..." value="" />
                     {servicosFiltrados.map((item) => (<Picker.Item key={item.id} label={item.nome} value={item.nome} />))}
                   </Picker>
                 </View>
 
-                {/* 👉 TIPO DE RESINA */}
+                {/* Tipo de resina */}
                 {isColeta && (
                   <>
                     <Text style={styles.label}>Tipo de Resina (Coleta):</Text>
@@ -942,7 +834,6 @@ export default function RetroativoScreen() {
                           </View>
                         )}
                         
-                        {/* 🟢 BOTÕES APENAS COM NÚMERO E FORMATO COMPACTO */}
                         <View style={styles.chipsContainer}>
                           {ramaisDisponiveis.map((r, i) => {
                             const rStr = String(r.ramal);
@@ -959,23 +850,19 @@ export default function RetroativoScreen() {
                           })}
                         </View>
 
-                        {/* 🟢 CAIXA AZUL COM OPÇÕES CLICÁVEIS */}
+                        {/* Atalho rápido de preenchimento (sem trava de limite) */}
                         {ramaisSelecionados.length > 0 && capacidadesDisponiveis.length > 0 && (
-                          <View style={[styles.dicaContainer, isServicoCoringa && {borderColor: '#F39C12', backgroundColor: '#FEF9E7'}]}>
-                            {isServicoCoringa ? (
-                              <Text style={[styles.dicaTitulo, {color: '#D35400'}]}>🃏 Serviço Coringa Selecionado (Sem Limite de Pés)</Text>
-                            ) : (
-                              <Text style={styles.dicaTitulo}>💡 Toque na opção para preencher:</Text>
-                            )}
+                          <View style={styles.dicaContainer}>
+                            <Text style={styles.dicaTitulo}>💡 Toque na opção para preencher:</Text>
                             
                             {capacidadesDisponiveis.map((cap, idx) => (
                               <TouchableOpacity 
                                 key={idx} 
-                                style={[styles.dicaBotao, isServicoCoringa && {borderColor: '#F39C12'}]} 
-                                onPress={() => handleMudancaQuantidade(String(cap.total))}
+                                style={styles.dicaBotao} 
+                                onPress={() => setQuantidade(String(cap.total))}
                               >
                                 <View style={styles.dicaRow}>
-                                  <Ionicons name="add-circle" size={24} color={isServicoCoringa ? "#E67E22" : "#3498DB"} />
+                                  <Ionicons name="add-circle" size={24} color="#3498DB" />
                                   <View style={styles.dicaInfo}>
                                     <Text style={styles.dicaBotaoTotal}>{cap.total} pés</Text>
                                     <Text style={styles.dicaBotaoServico}>{cap.servico}</Text>
@@ -992,12 +879,12 @@ export default function RetroativoScreen() {
 
                 <Text style={styles.label}>Quantidade Total (no lote selecionado):</Text>
                 <TextInput 
-                  style={[styles.inputQuantidade, !isCarregamentoResina && ramaisSelecionados.length === 0 && styles.disabledInput]} 
+                  style={styles.inputQuantidade} 
                   placeholder="Ex: 50" 
                   keyboardType="decimal-pad" 
                   value={quantidade} 
                   onChangeText={handleMudancaQuantidade} 
-                  editable={isCarregamentoResina || ramaisSelecionados.length > 0} 
+                  editable={true} 
                 />
 
                 {valorTotalCalculado > 0 && (
@@ -1177,7 +1064,6 @@ const styles = StyleSheet.create({
   dicaBotaoServico: { fontSize: 12, color: '#7F8C8D', marginTop: 2 },
 
   inputQuantidade: { borderWidth: 1, borderColor: '#E0E6ED', borderRadius: 8, padding: 12, fontSize: 18, backgroundColor: '#F8FAFC', height: 50 },
-  disabledInput: { backgroundColor: '#EAECEE' },
   
   rowData: { flexDirection: 'row', justifyContent: 'space-between' },
   colData: { width: '48%' },

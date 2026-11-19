@@ -1,88 +1,171 @@
 import { Picker } from '@react-native-picker/picker';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../src/supabase';
+
+const alertaWebMobile = (titulo: string, mensagem: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${titulo}\n\n${mensagem}`);
+  } else {
+    Alert.alert(titulo, mensagem);
+  }
+};
+
+const confirmacaoWebMobile = (titulo: string, mensagem: string, textoConfirmar: string, aoConfirmar: () => void) => {
+  if (Platform.OS === 'web') {
+    const confirmado = window.confirm(`${titulo}\n\n${mensagem}`);
+    if (confirmado) aoConfirmar();
+  } else {
+    Alert.alert(titulo, mensagem, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: textoConfirmar, style: textoConfirmar === 'Remover' ? 'destructive' : 'default', onPress: aoConfirmar }
+    ]);
+  }
+};
+
+const obterDataHojeLocalISO = () => {
+  const d = new Date();
+  const ano = d.getFullYear();
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const dia = String(d.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+};
+
+const buscarTodosColaboradores = async () => {
+  let todos: any[] = [];
+  const limite = 1000;
+  let inicio = 0;
+  let buscando = true;
+
+  while (buscando) {
+    const { data, error } = await supabase
+      .from('colaboradores')
+      .select('id, nome, fiscal_id, fiscal_vinculado')
+      .order('nome', { ascending: true })
+      .range(inicio, inicio + limite - 1);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      todos = [...todos, ...data];
+      if (data.length < limite) buscando = false;
+      else inicio += limite;
+    } else {
+      buscando = false;
+    }
+  }
+  return todos;
+};
 
 export default function EquipesScreen() {
   const [fiscais, setFiscais] = useState<any[]>([]);
   const [fiscalSelecionado, setFiscalSelecionado] = useState('');
   const [colaboradores, setColaboradores] = useState<any[]>([]);
-  const [busca, setBusca] = useState(''); // Estado para a barra de pesquisa
+  const [busca, setBusca] = useState('');
   
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
 
-  useEffect(() => {
-    carregarDados();
-  }, []);
-
   const carregarDados = async () => {
     setCarregando(true);
-    
-    // Puxa os líderes
-    const { data: fiscaisData } = await supabase
-      .from('perfis')
-      .select('id, nome')
-      .in('cargo', ['Fiscal de Campo', 'Supervisor', 'Encarregado', 'Administrador'])
-      .order('nome');
-      
-    if (fiscaisData) setFiscais(fiscaisData);
-
-    // Puxa todos os colaboradores
-    const { data: colabData } = await supabase
-      .from('colaboradores')
-      .select('id, nome, fiscal_id')
-      .order('nome');
-      
-    if (colabData) setColaboradores(colabData);
-    setCarregando(false);
+    try {
+      const [{ data: fiscaisData }, colabData] = await Promise.all([
+        supabase
+          .from('perfis')
+          .select('id, nome')
+          .in('cargo', ['Fiscal de Campo', 'Supervisor', 'Encarregado', 'Administrador'])
+          .order('nome'),
+        buscarTodosColaboradores()
+      ]);
+        
+      if (fiscaisData) setFiscais(fiscaisData);
+      if (colabData) setColaboradores(colabData);
+    } catch (err: any) {
+      console.log('Erro ao carregar equipes:', err);
+      alertaWebMobile('Erro', 'Não foi possível carregar as equipes.');
+    } finally {
+      setCarregando(false);
+    }
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      carregarDados();
+    }, [])
+  );
 
   // === FLUXO DE ADICIONAR / TRANSFERIR ===
   const confirmarVinculo = (colab: any) => {
     if (colab.fiscal_id && colab.fiscal_id !== fiscalSelecionado) {
-      Alert.alert(
+      const fiscalAntigo = fiscais.find(f => f.id === colab.fiscal_id)?.nome || colab.fiscal_vinculado || 'outra equipe';
+      confirmacaoWebMobile(
         'Colaborador Ocupado',
-        `${colab.nome} já pertence a outra equipe. Deseja transferi-lo para esta equipe?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Transferir', style: 'default', onPress: () => atualizarBanco(colab.id, fiscalSelecionado) }
-        ]
+        `${colab.nome} já pertence à equipe "${fiscalAntigo}". Deseja transferi-lo para esta equipe?`,
+        'Transferir',
+        () => atualizarBanco(colab, fiscalSelecionado)
       );
     } else {
-      atualizarBanco(colab.id, fiscalSelecionado);
+      atualizarBanco(colab, fiscalSelecionado);
     }
   };
 
   // === FLUXO DE REMOVER ===
   const confirmarDesvinculo = (colab: any) => {
-    Alert.alert(
+    confirmacaoWebMobile(
       'Remover da Equipe',
       `Tem certeza que deseja remover ${colab.nome} desta equipe?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Remover', style: 'destructive', onPress: () => atualizarBanco(colab.id, null) }
-      ]
+      'Remover',
+      () => atualizarBanco(colab, null)
     );
   };
 
-  // === COMUNICAÇÃO COM O BANCO ===
-  const atualizarBanco = async (colabId: string, novoFiscalId: string | null) => {
+  // === COMUNICAÇÃO COM O BANCO (ATUALIZA fiscal_id + fiscal_vinculado + DIÁRIO DE HOJE) ===
+  const atualizarBanco = async (colab: any, novoFiscalId: string | null) => {
     setSalvando(true);
-    const { error } = await supabase
-      .from('colaboradores')
-      .update({ fiscal_id: novoFiscalId })
-      .eq('id', colabId);
+    try {
+      const fiscalObj = novoFiscalId ? fiscais.find(f => f.id === novoFiscalId) : null;
+      const novoFiscalNome = fiscalObj ? fiscalObj.nome : null;
 
-    if (error) {
-      console.log("ERRO AO SALVAR:", error); 
-      Alert.alert('Erro no Banco', error.message);
-    } else {
-      setColaboradores(colaboradores.map(c => 
-        c.id === colabId ? { ...c, fiscal_id: novoFiscalId } : c
-      ));
+      const { error } = await supabase
+        .from('colaboradores')
+        .update({
+          fiscal_id: novoFiscalId,
+          fiscal_vinculado: novoFiscalNome
+        })
+        .eq('id', colab.id);
+
+      if (error) {
+        console.log('ERRO AO SALVAR:', error);
+        alertaWebMobile('Erro no Banco', error.message);
+        return;
+      }
+
+      // Atualiza também lançamentos já feitos HOJE para este colaborador não ficar preso na equipe antiga
+      if (novoFiscalNome && colab.nome) {
+        try {
+          const hojeISO = obterDataHojeLocalISO();
+          await supabase
+            .from('diarios_campo')
+            .update({ fiscal_nome: novoFiscalNome })
+            .eq('colaborador', colab.nome)
+            .gte('data', `${hojeISO} 00:00:00`)
+            .lte('data', `${hojeISO} 23:59:59`);
+        } catch (errDiario) {
+          console.warn('Aviso ao sincronizar diário de hoje:', errDiario);
+        }
+      }
+
+      setColaboradores(prev =>
+        prev.map(c =>
+          c.id === colab.id
+            ? { ...c, fiscal_id: novoFiscalId, fiscal_vinculado: novoFiscalNome }
+            : c
+        )
+      );
+    } finally {
+      setSalvando(false);
     }
-    setSalvando(false);
   };
 
   // === FILTROS PARA DIVIDIR A TELA ===
@@ -90,7 +173,7 @@ export default function EquipesScreen() {
   
   const disponiveis = colaboradores.filter(c => 
     c.fiscal_id !== fiscalSelecionado && 
-    c.nome.toLowerCase().includes(busca.toLowerCase())
+    String(c.nome || '').toLowerCase().includes(busca.toLowerCase())
   );
 
   return (
@@ -115,7 +198,7 @@ export default function EquipesScreen() {
       {fiscalSelecionado ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 50 }} keyboardShouldPersistTaps="handled">
           
-          {carregando || salvando ? <ActivityIndicator size="large" color="#3498DB" style={{marginVertical: 20}} /> : null}
+          {carregando || salvando ? <ActivityIndicator size="large" color="#3498DB" style={{ marginVertical: 20 }} /> : null}
 
           {/* === SEÇÃO 1: MINHA EQUIPE === */}
           <View style={styles.sectionContainer}>
@@ -149,14 +232,19 @@ export default function EquipesScreen() {
               onChangeText={setBusca}
             />
 
-            {disponiveis.slice(0, 30).map(colab => { // Limita a 30 na tela para não travar
+            {disponiveis.slice(0, 30).map(colab => {
               const isEmOutraEquipe = colab.fiscal_id && colab.fiscal_id !== fiscalSelecionado;
+              const nomeOutraEquipe = isEmOutraEquipe
+                ? (fiscais.find(f => f.id === colab.fiscal_id)?.nome || colab.fiscal_vinculado || 'outra equipe')
+                : '';
 
               return (
                 <View key={colab.id} style={[styles.row, styles.rowDisponivel]}>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
                     <Text style={styles.nomeDisponivel}>{colab.nome}</Text>
-                    {isEmOutraEquipe && <Text style={styles.textoAlerta}>⚠️ Em outra equipe</Text>}
+                    {isEmOutraEquipe && (
+                      <Text style={styles.textoAlerta}>⚠️ Em outra equipe ({nomeOutraEquipe})</Text>
+                    )}
                   </View>
                   
                   <TouchableOpacity 
